@@ -4,6 +4,7 @@ CFLAGS   ?= -O2 -g3 -Werror
 CFLAGS   += -Wall -Wshadow
 
 CFLAGS   += -Isrc
+LDFLAGS   = -lm
 BINDIR    = bin
 
 

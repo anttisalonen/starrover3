@@ -5,6 +5,7 @@
 #include <assert.h>
 #include <ctype.h>
 #include <limits.h>
+#include <math.h>
 
 #define SECTOR_SIDE	256
 
@@ -202,26 +203,33 @@ void get_random_name(int num_letters, char* name)
 
 /* space stuff */
 #define MAX_PLANETS_AROUND_STAR 8
+#define MAX_MOONS_AROUND_PLANET 8
 
-typedef enum planet_surface {
-	planet_surface_rock,
-	planet_surface_gas,
-} planet_surface;
+typedef enum satellite_surface {
+	satellite_surface_rock,
+	satellite_surface_gas,
+} satellite_surface;
 
-typedef enum planet_atmosphere {
-	planet_atmosphere_none,
-	planet_atmosphere_co2,
-	planet_atmosphere_oxygen,
-	planet_atmosphere_hydrogen,
-	planet_atmosphere_nitrogen, // must be the last one
-} planet_atmosphere;
+typedef enum satellite_atmosphere {
+	satellite_atmosphere_none,
+	satellite_atmosphere_co2,
+	satellite_atmosphere_oxygen,
+	satellite_atmosphere_hydrogen,
+	satellite_atmosphere_nitrogen, // must be the last one
+} satellite_atmosphere;
 
-typedef struct planet {
+typedef struct satellite {
 	float radius; // unit: earth radius
 	float mass; // unit: earth mass
-	planet_surface surface;
-	planet_atmosphere atmosphere;
+	satellite_surface surface;
+	satellite_atmosphere atmosphere;
 	float atmospheric_pressure; // unit: kPa (100 kPa = earth)
+} satellite;
+
+typedef struct planet {
+	satellite planet;
+	byte num_moons;
+	satellite moons[MAX_MOONS_AROUND_PLANET];
 } planet;
 
 typedef enum star_class {
@@ -257,10 +265,10 @@ typedef struct system_t {
 	star star;
 } system_t;
 
-const char* planet_description(const planet* p)
+const char* satellite_description(const satellite* p)
 {
 	assert(p);
-	if(p->surface == planet_surface_gas) {
+	if(p->surface == satellite_surface_gas) {
 		if(p->mass < 20)
 			return "small gas giant";
 		else if(p->mass < 150)
@@ -271,15 +279,15 @@ const char* planet_description(const planet* p)
 			return "huge gas giant";
 	} else {
 		switch(p->atmosphere) {
-			case planet_atmosphere_none:
+			case satellite_atmosphere_none:
 				return "rocky planetoid";
-			case planet_atmosphere_co2:
+			case satellite_atmosphere_co2:
 				return "rocky planet with co2 atmosphere";
-			case planet_atmosphere_oxygen:
+			case satellite_atmosphere_oxygen:
 				return "rocky planet with oxygen atmosphere";
-			case planet_atmosphere_hydrogen:
+			case satellite_atmosphere_hydrogen:
 				return "rocky planet with hydrogen atmosphere";
-			case planet_atmosphere_nitrogen:
+			case satellite_atmosphere_nitrogen:
 				return "rocky planet with nitrogen atmosphere";
 		}
 	}
@@ -287,36 +295,68 @@ const char* planet_description(const planet* p)
 	return "";
 }
 
-planet create_planet(float expected_mass)
+satellite create_satellite(float expected_mass)
 {
-	planet p;
+	satellite p;
 	assert(expected_mass > 0.001f);
 	assert(expected_mass <= 100.0f);
 	p.mass = myrandf_uniform(expected_mass * 0.1f, expected_mass * 10.0f);
 	if(p.mass > 10.0f) {
 		// gas
-		p.surface = planet_surface_gas;
+		p.surface = satellite_surface_gas;
 		// between 4 and 14
 		p.radius = 4.0f * myrandf_uniform(0.9f, 1.1f) +
 			(p.mass - 10.0f) * myrandf_uniform(0.05f, 0.1f);
-		p.atmosphere = planet_atmosphere_hydrogen;
+		p.atmosphere = satellite_atmosphere_hydrogen;
 	} else {
 		// rock
-		p.surface = planet_surface_rock;
+		p.surface = satellite_surface_rock;
 		// between 0.1 and 3.0
 		if(p.mass < 2.0f)
 			p.radius = 0.1f + p.mass * myrandf_uniform(0.8f, 1.2f);
 		else
 			p.radius = 2.0f + p.mass * 0.28f * myrandf_uniform(0.9f, 1.1f);
 		if(p.mass < 0.01f) {
-			p.atmosphere = planet_atmosphere_none;
+			p.atmosphere = satellite_atmosphere_none;
 		} else {
-			int r = myrandi(planet_atmosphere_nitrogen - 1);
+			int r = myrandi(satellite_atmosphere_nitrogen - 1);
 			r++;
-			assert(r > planet_atmosphere_none);
+			assert(r > satellite_atmosphere_none);
 			p.atmosphere = r;
 			p.atmospheric_pressure = p.mass * 100.0f;
 		}
+	}
+	return p;
+}
+
+planet create_planet(float expected_mass)
+{
+	planet p;
+	p.planet = create_satellite(expected_mass);
+
+	p.num_moons = sqrt(p.planet.mass) * myrandf_uniform(0.5f, 2.0f);
+	assert(p.num_moons >= 0);
+	if(p.num_moons > MAX_MOONS_AROUND_PLANET)
+		p.num_moons = MAX_MOONS_AROUND_PLANET;
+
+	for(int i = 0; i < p.num_moons; i++) {
+		float sat_exp_mass = 0.001f * p.planet.mass;
+		if(p.planet.mass > 10.0f) {
+			int rm = myrandi(10);
+			if(rm == 0)
+				sat_exp_mass *= myrandf_uniform(1.0f, 10.0f);
+			else
+				sat_exp_mass *= myrandf_uniform(0.001f, 1.0f);
+		}
+		if(sat_exp_mass > 0.01f * p.planet.mass)
+			sat_exp_mass = 0.01f * p.planet.mass;
+
+		if(sat_exp_mass > 1.0f)
+			sat_exp_mass = 1.0f;
+		if(sat_exp_mass < 0.0011f)
+			sat_exp_mass = 0.0011f;
+
+		p.moons[i] = create_satellite(sat_exp_mass);
 	}
 	return p;
 }
@@ -421,7 +461,7 @@ star create_star(void)
 			s.mass        = s.radius * myrandf_uniform(0.9f, 1.1f);
 			s.luminosity  = s.radius * myrandf_uniform(0.9f, 1.1f);
 			s.temperature = myrandi_uniform(53, 60) * 100;
-			s.num_planets = myrandi_uniform(MAX_PLANETS_AROUND_STAR / 8, MAX_PLANETS_AROUND_STAR);
+			s.num_planets = myrandi_uniform(MAX_PLANETS_AROUND_STAR / 4, MAX_PLANETS_AROUND_STAR);
 			break;
 
 		case star_class_k:
@@ -429,7 +469,7 @@ star create_star(void)
 			s.mass        = s.radius * myrandf_uniform(0.9f, 1.1f);
 			s.luminosity  = s.radius * myrandf_uniform(0.9f, 1.1f);
 			s.temperature = myrandi_uniform(39, 52) * 100;
-			s.num_planets = myrandi_uniform(1, MAX_PLANETS_AROUND_STAR);
+			s.num_planets = myrandi_uniform(2, MAX_PLANETS_AROUND_STAR);
 			break;
 
 		case star_class_m_giant:
@@ -437,7 +477,7 @@ star create_star(void)
 			s.mass        = myrandf_uniform(0.3f, 8.0f);
 			s.luminosity  = myrandf_uniform(50, 1000);
 			s.temperature = myrandi_uniform(30, 100) * 100;
-			s.num_planets = myrandi_uniform(1, MAX_PLANETS_AROUND_STAR / 2);
+			s.num_planets = myrandi_uniform(2, MAX_PLANETS_AROUND_STAR / 2);
 			break;
 
 		case star_class_m_dwarf:
@@ -505,9 +545,15 @@ int main(void)
 				s.name, s.coord.x, s.coord.y,
 				star_class_to_string(s.star.class), s.star.temperature);
 		for(int j = 0; j < s.star.num_planets; j++) {
+			planet* p = &s.star.planets[j];
 			printf("\tPlanet %d: %s (%3.2f earth masses)\n",
-					j + 1, planet_description(&s.star.planets[j]),
-					s.star.planets[j].mass);
+					j + 1, satellite_description(&p->planet),
+					p->planet.mass);
+			for(int k = 0; k < p->num_moons; k++) {
+				printf("\t\tMoon %d: %s (%3.2f earth masses)\n",
+						k + 1, satellite_description(&p->moons[k]),
+						p->moons[k].mass);
+			}
 		}
 	}
 	return 0;
