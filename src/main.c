@@ -4,6 +4,7 @@
 #include <string.h>
 #include <assert.h>
 #include <ctype.h>
+#include <limits.h>
 
 #define SECTOR_SIDE	256
 
@@ -19,6 +20,29 @@ void mysrand(uint32_t s)
 uint32_t myrand(void)
 {
 	return rand();
+}
+
+inline uint32_t myrandi(int i);
+uint32_t myrandi(int i)
+{
+	assert(i != 0);
+	return myrand() % i;
+}
+
+inline int myrandi_uniform(int a, int b);
+int myrandi_uniform(int a, int b)
+{
+	assert(b > a);
+	assert(a != b);
+	return (myrand() % (b - a)) + a;
+}
+
+inline float myrandf_uniform(float a, float b);
+float myrandf_uniform(float a, float b)
+{
+	assert(b > a);
+	int r = myrand();
+	return a + (r / (float)INT_MAX) * (b - a);
 }
 
 byte myrandbyte(void)
@@ -123,7 +147,7 @@ int initialise_name_generation(void)
 	fclose(f);
 #endif
 
-#if 1
+#if 0
 	printf("    ");
 	for(int i = 0; i < 27; i++) {
 		printf("%c   ", i + 'a' - 1);
@@ -177,6 +201,26 @@ void get_random_name(int num_letters, char* name)
 }
 
 /* space stuff */
+typedef enum star_class {
+	star_class_o,
+	star_class_b,
+	star_class_a,
+	star_class_f,
+	star_class_g,
+	star_class_k,
+	star_class_m_dwarf,
+	star_class_m_giant,
+	star_class_d
+} star_class;
+
+typedef struct star {
+	float radius; // unit: solar radius
+	float mass;   // unit: solar mass
+	float luminosity; // unit: solar luminosity
+	uint32_t temperature; // unit: kelvin
+	star_class class;
+} star;
+
 typedef struct system_coord {
 	byte x;
 	byte y;
@@ -185,7 +229,136 @@ typedef struct system_coord {
 typedef struct system_t {
 	system_coord coord;
 	char name[16];
+	star star;
 } system_t;
+
+const char* star_class_to_string(star_class c)
+{
+	switch(c) {
+		case star_class_o:
+			return "class O";
+
+		case star_class_b:
+			return "class B";
+
+		case star_class_a:
+			return "class A";
+
+		case star_class_f:
+			return "class F";
+
+		case star_class_g:
+			return "class G";
+
+		case star_class_k:
+			return "class K";
+
+		case star_class_m_giant:
+			return "red giant";
+
+		case star_class_m_dwarf:
+			return "red dwarf";
+
+		case star_class_d:
+			return "white dwarf";
+	}
+}
+
+star_class create_star_class(void)
+{
+	int r = myrandi(10000);
+	if(r == 0) // really: 0.00003%
+		return star_class_o;
+	else if(r == 1)
+		return star_class_b;
+	else if(r < 62) // 0.625%
+		return star_class_a;
+	else if(r < 303) // 3.03%
+		return star_class_f;
+	else if(r < 1000) // 7.5%
+		return star_class_g;
+	else if(r < 2200) // 12%
+		return star_class_k;
+	else if(r < 2400) // 2% (don't know how realistic)
+		return star_class_d;
+	// according to Wikipedia, M is ~76% of all.
+	// Split this to 75% dwarf, 1% giant.
+	else if(r < 2500)
+		return star_class_m_giant;
+	else
+		return star_class_m_dwarf;
+}
+
+star create_star(void)
+{
+	star s;
+	s.class = create_star_class();
+	switch(s.class) {
+		case star_class_o:
+			s.radius      = myrandf_uniform(5, 15);
+			s.mass        = s.radius * myrandf_uniform(4.8f, 5.2f);
+			s.luminosity  = s.radius * myrandf_uniform(5900.0f, 6100.0f);
+			s.temperature = myrandi_uniform(300, 520) * 100;
+			break;
+
+		case star_class_b:
+			s.radius      = myrandf_uniform(3, 7);
+			s.mass        = s.radius * myrandf_uniform(1.9f, 2.1f);
+			s.luminosity  = s.radius * myrandf_uniform(9000.0f, 11000.0f);
+			s.temperature = myrandi_uniform(100, 300) * 100;
+			break;
+
+		case star_class_a:
+			s.radius      = myrandf_uniform(1.5f, 2.0f);
+			s.mass        = s.radius * myrandf_uniform(0.8f, 1.2f);
+			s.luminosity  = s.radius * myrandf_uniform(15.0f, 25.0f);
+			s.temperature = myrandi_uniform(76, 100) * 100;
+			break;
+
+		case star_class_f:
+			s.radius      = myrandf_uniform(1.0f, 1.4f);
+			s.mass        = s.radius * myrandf_uniform(0.8f, 1.2f);
+			s.luminosity  = s.radius * myrandf_uniform(3.0f, 3.5f);
+			s.temperature = myrandi_uniform(60, 76) * 100;
+			break;
+
+		case star_class_g:
+			s.radius      = myrandf_uniform(0.8f, 1.2f);
+			s.mass        = s.radius * myrandf_uniform(0.9f, 1.1f);
+			s.luminosity  = s.radius * myrandf_uniform(0.9f, 1.1f);
+			s.temperature = myrandi_uniform(53, 60) * 100;
+			break;
+
+		case star_class_k:
+			s.radius      = myrandf_uniform(0.6f, 0.9f);
+			s.mass        = s.radius * myrandf_uniform(0.9f, 1.1f);
+			s.luminosity  = s.radius * myrandf_uniform(0.9f, 1.1f);
+			s.temperature = myrandi_uniform(39, 52) * 100;
+			break;
+
+		case star_class_m_giant:
+			s.radius      = myrandf_uniform(10, 50);
+			s.mass        = myrandf_uniform(0.3f, 8.0f);
+			s.luminosity  = myrandf_uniform(50, 1000);
+			s.temperature = myrandi_uniform(30, 100) * 100;
+			break;
+
+		case star_class_m_dwarf:
+			s.radius      = myrandf_uniform(0.1f, 0.5f);
+			s.mass        = s.radius * myrandf_uniform(0.8f, 1.0f);
+			s.luminosity  = s.radius * myrandf_uniform(0.1f, 0.2f);
+			s.temperature = myrandi_uniform(23, 38) * 100;
+			break;
+
+		case star_class_d:
+			s.radius      = myrandf_uniform(0.008f, 0.02f);
+			s.mass        = myrandf_uniform(0.5f, 0.7f);
+			s.luminosity  = s.radius * myrandf_uniform(0.9f, 1.1f);
+			s.temperature = s.luminosity * 1000000; // 8k-20k
+			break;
+	}
+	return s;
+}
 
 system_coord create_system_coord(void)
 {
@@ -199,7 +372,7 @@ system_coord create_system_coord(void)
 void create_system_name(char name[static 16])
 {
 	memset(name, 0x00, 16);
-	int name_len = myrand() % 10 + 4;
+	int name_len = myrandi(10) + 4;
 	get_random_name(name_len, name);
 	name[0] = toupper(name[0]);
 }
@@ -209,6 +382,7 @@ system_t create_system(void)
 	system_t s;
 	s.coord = create_system_coord();
 	create_system_name(s.name);
+	s.star = create_star();
 	return s;
 }
 
@@ -219,9 +393,11 @@ int main(void)
 		return 1;
 	}
 
-	for(int i = 0; i < 100; i++) {
+	for(int i = 0; i < 32; i++) {
 		system_t s = create_system();
-		printf("System '%s' at %d, %d\n", s.name, s.coord.x, s.coord.y);
+		printf("System '%s' at %d, %d with a %s star at %d degrees\n",
+				s.name, s.coord.x, s.coord.y,
+				star_class_to_string(s.star.class), s.star.temperature);
 	}
 	return 0;
 }
