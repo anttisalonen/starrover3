@@ -201,6 +201,29 @@ void get_random_name(int num_letters, char* name)
 }
 
 /* space stuff */
+#define MAX_PLANETS_AROUND_STAR 8
+
+typedef enum planet_surface {
+	planet_surface_rock,
+	planet_surface_gas,
+} planet_surface;
+
+typedef enum planet_atmosphere {
+	planet_atmosphere_none,
+	planet_atmosphere_co2,
+	planet_atmosphere_oxygen,
+	planet_atmosphere_hydrogen,
+	planet_atmosphere_nitrogen, // must be the last one
+} planet_atmosphere;
+
+typedef struct planet {
+	float radius; // unit: earth radius
+	float mass; // unit: earth mass
+	planet_surface surface;
+	planet_atmosphere atmosphere;
+	float atmospheric_pressure; // unit: kPa (100 kPa = earth)
+} planet;
+
 typedef enum star_class {
 	star_class_o,
 	star_class_b,
@@ -219,6 +242,8 @@ typedef struct star {
 	float luminosity; // unit: solar luminosity
 	uint32_t temperature; // unit: kelvin
 	star_class class;
+	byte num_planets;
+	planet planets[MAX_PLANETS_AROUND_STAR];
 } star;
 
 typedef struct system_coord {
@@ -231,6 +256,70 @@ typedef struct system_t {
 	char name[16];
 	star star;
 } system_t;
+
+const char* planet_description(const planet* p)
+{
+	assert(p);
+	if(p->surface == planet_surface_gas) {
+		if(p->mass < 20)
+			return "small gas giant";
+		else if(p->mass < 150)
+			return "medium gas giant";
+		else if(p->mass < 350)
+			return "large gas giant";
+		else
+			return "huge gas giant";
+	} else {
+		switch(p->atmosphere) {
+			case planet_atmosphere_none:
+				return "rocky planetoid";
+			case planet_atmosphere_co2:
+				return "rocky planet with co2 atmosphere";
+			case planet_atmosphere_oxygen:
+				return "rocky planet with oxygen atmosphere";
+			case planet_atmosphere_hydrogen:
+				return "rocky planet with hydrogen atmosphere";
+			case planet_atmosphere_nitrogen:
+				return "rocky planet with nitrogen atmosphere";
+		}
+	}
+	assert(0);
+	return "";
+}
+
+planet create_planet(float expected_mass)
+{
+	planet p;
+	assert(expected_mass > 0.001f);
+	assert(expected_mass <= 100.0f);
+	p.mass = myrandf_uniform(expected_mass * 0.1f, expected_mass * 10.0f);
+	if(p.mass > 10.0f) {
+		// gas
+		p.surface = planet_surface_gas;
+		// between 4 and 14
+		p.radius = 4.0f * myrandf_uniform(0.9f, 1.1f) +
+			(p.mass - 10.0f) * myrandf_uniform(0.05f, 0.1f);
+		p.atmosphere = planet_atmosphere_hydrogen;
+	} else {
+		// rock
+		p.surface = planet_surface_rock;
+		// between 0.1 and 3.0
+		if(p.mass < 2.0f)
+			p.radius = 0.1f + p.mass * myrandf_uniform(0.8f, 1.2f);
+		else
+			p.radius = 2.0f + p.mass * 0.28f * myrandf_uniform(0.9f, 1.1f);
+		if(p.mass < 0.01f) {
+			p.atmosphere = planet_atmosphere_none;
+		} else {
+			int r = myrandi(planet_atmosphere_nitrogen - 1);
+			r++;
+			assert(r > planet_atmosphere_none);
+			p.atmosphere = r;
+			p.atmospheric_pressure = p.mass * 100.0f;
+		}
+	}
+	return p;
+}
 
 const char* star_class_to_string(star_class c)
 {
@@ -293,12 +382,14 @@ star create_star(void)
 {
 	star s;
 	s.class = create_star_class();
+
 	switch(s.class) {
 		case star_class_o:
 			s.radius      = myrandf_uniform(5, 15);
 			s.mass        = s.radius * myrandf_uniform(4.8f, 5.2f);
 			s.luminosity  = s.radius * myrandf_uniform(5900.0f, 6100.0f);
 			s.temperature = myrandi_uniform(300, 520) * 100;
+			s.num_planets = myrandi_uniform(MAX_PLANETS_AROUND_STAR / 2, MAX_PLANETS_AROUND_STAR + 1);
 			break;
 
 		case star_class_b:
@@ -306,6 +397,7 @@ star create_star(void)
 			s.mass        = s.radius * myrandf_uniform(1.9f, 2.1f);
 			s.luminosity  = s.radius * myrandf_uniform(9000.0f, 11000.0f);
 			s.temperature = myrandi_uniform(100, 300) * 100;
+			s.num_planets = myrandi_uniform(MAX_PLANETS_AROUND_STAR / 2, MAX_PLANETS_AROUND_STAR + 1);
 			break;
 
 		case star_class_a:
@@ -313,6 +405,7 @@ star create_star(void)
 			s.mass        = s.radius * myrandf_uniform(0.8f, 1.2f);
 			s.luminosity  = s.radius * myrandf_uniform(15.0f, 25.0f);
 			s.temperature = myrandi_uniform(76, 100) * 100;
+			s.num_planets = myrandi_uniform(MAX_PLANETS_AROUND_STAR / 2, MAX_PLANETS_AROUND_STAR + 1);
 			break;
 
 		case star_class_f:
@@ -320,6 +413,7 @@ star create_star(void)
 			s.mass        = s.radius * myrandf_uniform(0.8f, 1.2f);
 			s.luminosity  = s.radius * myrandf_uniform(3.0f, 3.5f);
 			s.temperature = myrandi_uniform(60, 76) * 100;
+			s.num_planets = myrandi_uniform(MAX_PLANETS_AROUND_STAR / 3, MAX_PLANETS_AROUND_STAR);
 			break;
 
 		case star_class_g:
@@ -327,6 +421,7 @@ star create_star(void)
 			s.mass        = s.radius * myrandf_uniform(0.9f, 1.1f);
 			s.luminosity  = s.radius * myrandf_uniform(0.9f, 1.1f);
 			s.temperature = myrandi_uniform(53, 60) * 100;
+			s.num_planets = myrandi_uniform(MAX_PLANETS_AROUND_STAR / 8, MAX_PLANETS_AROUND_STAR);
 			break;
 
 		case star_class_k:
@@ -334,6 +429,7 @@ star create_star(void)
 			s.mass        = s.radius * myrandf_uniform(0.9f, 1.1f);
 			s.luminosity  = s.radius * myrandf_uniform(0.9f, 1.1f);
 			s.temperature = myrandi_uniform(39, 52) * 100;
+			s.num_planets = myrandi_uniform(1, MAX_PLANETS_AROUND_STAR);
 			break;
 
 		case star_class_m_giant:
@@ -341,13 +437,16 @@ star create_star(void)
 			s.mass        = myrandf_uniform(0.3f, 8.0f);
 			s.luminosity  = myrandf_uniform(50, 1000);
 			s.temperature = myrandi_uniform(30, 100) * 100;
+			s.num_planets = myrandi_uniform(1, MAX_PLANETS_AROUND_STAR / 2);
 			break;
 
 		case star_class_m_dwarf:
+			assert(MAX_PLANETS_AROUND_STAR >= 4);
 			s.radius      = myrandf_uniform(0.1f, 0.5f);
 			s.mass        = s.radius * myrandf_uniform(0.8f, 1.0f);
 			s.luminosity  = s.radius * myrandf_uniform(0.1f, 0.2f);
 			s.temperature = myrandi_uniform(23, 38) * 100;
+			s.num_planets = myrandi_uniform(1, 4);
 			break;
 
 		case star_class_d:
@@ -355,8 +454,15 @@ star create_star(void)
 			s.mass        = myrandf_uniform(0.5f, 0.7f);
 			s.luminosity  = s.radius * myrandf_uniform(0.9f, 1.1f);
 			s.temperature = s.luminosity * 1000000; // 8k-20k
+			s.num_planets = myrandi_uniform(1, 4);
 			break;
 	}
+
+	for(int i = 0; i < s.num_planets; i++) {
+		float exp_mass = 10.0f * (i + 1) / (float)s.num_planets;
+		s.planets[i] = create_planet(exp_mass);
+	}
+
 	return s;
 }
 
@@ -393,11 +499,16 @@ int main(void)
 		return 1;
 	}
 
-	for(int i = 0; i < 32; i++) {
+	for(int i = 0; i < 8; i++) {
 		system_t s = create_system();
 		printf("System '%s' at %d, %d with a %s star at %d degrees\n",
 				s.name, s.coord.x, s.coord.y,
 				star_class_to_string(s.star.class), s.star.temperature);
+		for(int j = 0; j < s.star.num_planets; j++) {
+			printf("\tPlanet %d: %s (%3.2f earth masses)\n",
+					j + 1, planet_description(&s.star.planets[j]),
+					s.star.planets[j].mass);
+		}
 	}
 	return 0;
 }
