@@ -248,6 +248,8 @@ typedef struct star {
 	float radius; // unit: solar radius
 	float mass;   // unit: solar mass
 	float luminosity; // unit: solar luminosity
+	float orbit_radius; // unit: au
+	float avg_orbital_speed; // unit: km/s
 	uint32_t temperature; // unit: kelvin
 	star_class class;
 	byte num_planets;
@@ -264,6 +266,13 @@ typedef struct system_t {
 	char name[16];
 	star star;
 } system_t;
+
+#define MAX_NUM_SYSTEMS_PER_SYSTEM_GROUP	32
+
+typedef struct system_group {
+	byte num_systems;
+	system_t systems[MAX_NUM_SYSTEMS_PER_SYSTEM_GROUP];
+} system_group;
 
 const char* satellite_description(const satellite* p)
 {
@@ -300,7 +309,7 @@ satellite create_satellite(float expected_mass)
 	satellite p;
 	assert(expected_mass > 0.001f);
 	assert(expected_mass <= 100.0f);
-	p.mass = myrandf_uniform(expected_mass * 0.1f, expected_mass * 10.0f);
+	p.mass = myrandf_uniform(expected_mass * 0.01f, expected_mass * 10.0f);
 	if(p.mass > 10.0f) {
 		// gas
 		p.surface = satellite_surface_gas;
@@ -326,6 +335,7 @@ satellite create_satellite(float expected_mass)
 			p.atmospheric_pressure = p.mass * 100.0f;
 		}
 	}
+
 	return p;
 }
 
@@ -532,6 +542,193 @@ system_t create_system(void)
 	return s;
 }
 
+void create_system_group(system_group* s)
+{
+	assert(s);
+	s->num_systems = MAX_NUM_SYSTEMS_PER_SYSTEM_GROUP;
+	for(int i = 0; i < MAX_NUM_SYSTEMS_PER_SYSTEM_GROUP; i++) {
+		s->systems[i] = create_system();
+	}
+}
+
+/* political stuff */
+#define MAX_NUM_NATIONS 4
+#define MAX_NUM_SETTLEMENTS_FOR_NATION 16
+
+static const char* nation_names[MAX_NUM_NATIONS] = {
+	"vulravian",
+	"maugurian",
+	"inderian",
+	"andarian"
+};
+
+typedef enum relationship {
+	relationship_none,
+	relationship_peace,
+	relationship_war,
+	relationship_trade_embargo,
+	relationship_alliance
+} relationship;
+
+typedef struct nation {
+	const char* name;
+	byte index;
+	byte militaristic;  /* as opposed to pacifist */
+	byte authoritarian; /* as opposed to libertanian */
+	byte capitalist;    /* as opposed to planned economy */
+	relationship relationships[MAX_NUM_NATIONS];
+} nation;
+
+typedef struct locator {
+	byte system;
+	byte star;
+	byte planet;
+	byte moon;
+} locator;
+
+typedef struct settlement {
+	locator locator;
+	byte nation_index;
+	byte size;
+	byte wealth;
+	byte industrial;
+	byte agricultural;
+} settlement;
+
+#define MAX_NUM_SETTLEMENTS	16
+
+typedef struct settlement_group {
+	int num_settlements;
+	settlement settlements[MAX_NUM_SETTLEMENTS];
+} settlement_group;
+
+nation create_nation(int i)
+{
+	nation n;
+	assert(i < MAX_NUM_NATIONS);
+	n.name = nation_names[i];
+	n.index = i;
+
+	assert(MAX_NUM_NATIONS == 4);
+	switch(i) {
+		case 0: // fascist
+			n.militaristic = 250;
+			n.authoritarian = 250;
+			n.capitalist = 250;
+			break;
+
+		case 1: // monks in a cave
+			n.militaristic = 1;
+			n.authoritarian = 250;
+			n.capitalist = 20;
+			break;
+
+		case 2: // capitalist
+			n.militaristic = 50;
+			n.authoritarian = 190;
+			n.capitalist = 250;
+			break;
+
+		case 3: // anarchist
+			n.militaristic = 190;
+			n.authoritarian = 30;
+			n.capitalist = 20;
+			break;
+	}
+
+	for(int k = 0; k < MAX_NUM_NATIONS; k++) {
+		if(k == i)
+			n.relationships[k] = relationship_peace;
+		else
+			n.relationships[k] = relationship_none;
+	}
+
+	return n;
+}
+
+/* adds a new settlements in settlements[settlements->num_settlements]. */
+/* returns 1 if found and added, or 0 if not found. */
+int find_settlement(byte nation_index, const system_group* systems, settlement_group* settlements)
+{
+	assert(settlements);
+	assert(systems);
+	assert(settlements->num_settlements < MAX_NUM_SETTLEMENTS);
+
+	for(int i = 0; i < 40; i++) {
+		int sys_index = myrandi(systems->num_systems);
+		const system_t* system = &systems->systems[sys_index];
+		const star* star = &system->star;
+
+		if(!star->num_planets)
+			continue;
+		int planet_index = myrandi(star->num_planets);
+		const planet* planet = &star->planets[planet_index];
+		const satellite* sat = &planet->planet;
+		int moon_index = 0xff;
+		if(planet->num_moons && sat->surface == satellite_surface_gas) {
+			moon_index = myrandi(planet->num_moons);
+			sat = &planet->moons[moon_index];
+		}
+
+		if(sat->surface == satellite_surface_gas)
+			continue;
+
+		if(sat->mass < 0.1f)
+			continue;
+
+		/* check if already populated */
+		int populated = 0;
+		for(int j = 0; j < settlements->num_settlements; j++) {
+			if(settlements->settlements[i].locator.system != sys_index)
+				continue;
+
+			if(settlements->settlements[i].locator.star != 0)
+				continue;
+
+			if(settlements->settlements[i].locator.planet != planet_index)
+				continue;
+
+			if(settlements->settlements[i].locator.moon != moon_index)
+				continue;
+
+			populated = 1;
+			break;
+		}
+
+		if(populated)
+			continue;
+
+		settlement* s = &settlements->settlements[settlements->num_settlements];
+		s->locator.system = sys_index;
+		s->locator.star   = 0;
+		s->locator.planet = planet_index;
+		s->locator.moon   = moon_index;
+		s->nation_index   = nation_index;
+		s->size = 1;
+		s->wealth = 1;
+		s->industrial = 0;
+		s->agricultural = 0;
+		return 1;
+	}
+	return 0;
+}
+
+void create_settlement_collection(byte num_nations, const system_group* systems, settlement_group* settlements)
+{
+	assert(num_nations > 0);
+	for(int i = 0; i < MAX_NUM_SETTLEMENTS; i++) {
+		int nation_id = i % num_nations;
+		int found = find_settlement(nation_id, systems, settlements);
+		if(!found)
+			break;
+		settlements->num_settlements = i;
+	}
+
+	return;
+}
+
+#define NUM_NATIONS			4
+
 int main(void)
 {
 	mysrand(21);
@@ -539,13 +736,26 @@ int main(void)
 		return 1;
 	}
 
-	for(int i = 0; i < 8; i++) {
-		system_t s = create_system();
-		printf("System '%s' at %d, %d with a %s star at %d degrees\n",
-				s.name, s.coord.x, s.coord.y,
-				star_class_to_string(s.star.class), s.star.temperature);
-		for(int j = 0; j < s.star.num_planets; j++) {
-			planet* p = &s.star.planets[j];
+	system_group systems;
+
+	create_system_group(&systems);
+
+	nation nations[NUM_NATIONS];
+	settlement_group settlements;
+
+	for(int i = 0; i < NUM_NATIONS; i++) {
+		nations[i] = create_nation(i);
+	}
+
+	create_settlement_collection(NUM_NATIONS, &systems, &settlements);
+
+	for(int i = 0; i < systems.num_systems; i++) {
+		system_t* s = &systems.systems[i];
+		printf("System %d: '%s' at %d, %d with a %s star at %d degrees\n",
+				i + 1, s->name, s->coord.x, s->coord.y,
+				star_class_to_string(s->star.class), s->star.temperature);
+		for(int j = 0; j < s->star.num_planets; j++) {
+			planet* p = &s->star.planets[j];
 			printf("\tPlanet %d: %s (%3.2f earth masses)\n",
 					j + 1, satellite_description(&p->planet),
 					p->planet.mass);
@@ -556,6 +766,18 @@ int main(void)
 			}
 		}
 	}
+
+	for(int i = 0; i < settlements.num_settlements; i++) {
+		locator* l = &settlements.settlements[i].locator;
+		printf("Settlement %d at system %d, planet %d", i + 1,
+				l->system + 1,
+				l->planet + 1);
+		if(l->moon != 0xff)
+			printf(", moon %d\n", l->moon + 1);
+		else
+			printf("\n");
+	}
+
 	return 0;
 }
 
