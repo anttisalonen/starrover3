@@ -679,16 +679,16 @@ int find_settlement(byte nation_index, const system_group* systems, settlement_g
 		/* check if already populated */
 		int populated = 0;
 		for(int j = 0; j < settlements->num_settlements; j++) {
-			if(settlements->settlements[i].locator.system != sys_index)
+			if(settlements->settlements[j].locator.system != sys_index)
 				continue;
 
-			if(settlements->settlements[i].locator.star != 0)
+			if(settlements->settlements[j].locator.star != 0)
 				continue;
 
-			if(settlements->settlements[i].locator.planet != planet_index)
+			if(settlements->settlements[j].locator.planet != planet_index)
 				continue;
 
-			if(settlements->settlements[i].locator.moon != moon_index)
+			if(settlements->settlements[j].locator.moon != moon_index)
 				continue;
 
 			populated = 1;
