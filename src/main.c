@@ -218,12 +218,19 @@ typedef enum satellite_atmosphere {
 	satellite_atmosphere_nitrogen, // must be the last one
 } satellite_atmosphere;
 
+typedef struct orbit {
+	// for now assume eccentricity = 0, inclination = 0
+	float semimajor_axis; // unit: au
+	float avg_orbital_speed; // unit: km/s
+} orbit;
+
 typedef struct satellite {
 	float radius; // unit: earth radius
 	float mass; // unit: earth mass
 	satellite_surface surface;
 	satellite_atmosphere atmosphere;
-	float atmospheric_pressure; // unit: kPa (100 kPa = earth)
+	float atmospheric_pressure; // unit: 100 kPa (= pressure on earth)
+	orbit orbit;
 } satellite;
 
 typedef struct planet {
@@ -248,8 +255,6 @@ typedef struct star {
 	float radius; // unit: solar radius
 	float mass;   // unit: solar mass
 	float luminosity; // unit: solar luminosity
-	float orbit_radius; // unit: au
-	float avg_orbital_speed; // unit: km/s
 	uint32_t temperature; // unit: kelvin
 	star_class class;
 	byte num_planets;
@@ -273,6 +278,36 @@ typedef struct system_group {
 	byte num_systems;
 	system_t systems[MAX_NUM_SYSTEMS_PER_SYSTEM_GROUP];
 } system_group;
+
+/* unit: kelvin */
+int satellite_temperature(const satellite* sat, const satellite* primary, const star* star)
+{
+	assert(sat);
+	assert(star);
+	float tot_dist = sat->orbit.semimajor_axis;
+	if(primary)
+		tot_dist += primary->orbit.semimajor_axis;
+
+	int star_temp = star->temperature;
+	star_temp *= 0.15f;
+
+	if(tot_dist < 0.001f)
+		return star_temp;
+
+	int temp = star_temp / powf(1.0f + tot_dist, 1.2f);
+
+	if(sat->atmospheric_pressure < 1.0f) {
+		if(sat->atmospheric_pressure > 0.4f)
+			temp *= sat->atmospheric_pressure;
+		else
+			temp *= 0.4f;
+	}
+
+	if(sat->atmosphere == satellite_atmosphere_co2)
+		temp = temp * 1.5f;
+
+	return temp;
+}
 
 const char* satellite_description(const satellite* p)
 {
@@ -304,9 +339,10 @@ const char* satellite_description(const satellite* p)
 	return "";
 }
 
-satellite create_satellite(float expected_mass)
+satellite create_satellite(float expected_mass, const orbit* o)
 {
 	satellite p;
+	assert(o);
 	assert(expected_mass > 0.001f);
 	assert(expected_mass <= 100.0f);
 	p.mass = myrandf_uniform(expected_mass * 0.01f, expected_mass * 10.0f);
@@ -317,6 +353,7 @@ satellite create_satellite(float expected_mass)
 		p.radius = 4.0f * myrandf_uniform(0.9f, 1.1f) +
 			(p.mass - 10.0f) * myrandf_uniform(0.05f, 0.1f);
 		p.atmosphere = satellite_atmosphere_hydrogen;
+		p.atmospheric_pressure = 1.0f;
 	} else {
 		// rock
 		p.surface = satellite_surface_rock;
@@ -327,22 +364,48 @@ satellite create_satellite(float expected_mass)
 			p.radius = 2.0f + p.mass * 0.28f * myrandf_uniform(0.9f, 1.1f);
 		if(p.mass < 0.01f) {
 			p.atmosphere = satellite_atmosphere_none;
+			p.atmospheric_pressure = 0.0f;
 		} else {
 			int r = myrandi(satellite_atmosphere_nitrogen - 1);
 			r++;
 			assert(r > satellite_atmosphere_none);
 			p.atmosphere = r;
-			p.atmospheric_pressure = p.mass * 100.0f;
+			p.atmospheric_pressure = p.mass;
 		}
 	}
+
+	p.orbit = *o;
 
 	return p;
 }
 
-planet create_planet(float expected_mass)
+orbit create_planet_orbit(const star* star, int num)
+{
+	orbit o;
+	assert(star);
+	num++;
+	o.semimajor_axis = star->radius * 0.1f + num * num * 0.2f * star->mass * myrandf_uniform(0.8f, 1.2f);
+	o.avg_orbital_speed = star->mass * 100.0f / o.semimajor_axis;
+	return o;
+}
+
+orbit create_orbit(const satellite* primary, int num)
+{
+	orbit o;
+	assert(primary);
+	// calculate with earth radius as unit
+	o.semimajor_axis = primary->radius * 3.0f + num * num * primary->mass * myrandf_uniform(0.8f, 1.2f);
+	// convert to au
+	o.semimajor_axis *= 0.000042634f;
+	o.avg_orbital_speed = primary->mass * 10.0f / o.semimajor_axis;
+	return o;
+}
+
+planet create_planet(float expected_mass, const orbit* planet_orbit)
 {
 	planet p;
-	p.planet = create_satellite(expected_mass);
+	assert(planet_orbit);
+	p.planet = create_satellite(expected_mass, planet_orbit);
 
 	p.num_moons = sqrt(p.planet.mass) * myrandf_uniform(0.5f, 2.0f);
 	assert(p.num_moons >= 0);
@@ -366,7 +429,8 @@ planet create_planet(float expected_mass)
 		if(sat_exp_mass < 0.0011f)
 			sat_exp_mass = 0.0011f;
 
-		p.moons[i] = create_satellite(sat_exp_mass);
+		orbit sat_orbit = create_orbit(&p.planet, i);
+		p.moons[i] = create_satellite(sat_exp_mass, &sat_orbit);
 	}
 	return p;
 }
@@ -508,9 +572,14 @@ star create_star(void)
 			break;
 	}
 
+	int orbit_num = 0;
 	for(int i = 0; i < s.num_planets; i++) {
+		orbit_num++;
+		if(myrandi(3) == 0)
+			orbit_num++;
 		float exp_mass = 10.0f * (i + 1) / (float)s.num_planets;
-		s.planets[i] = create_planet(exp_mass);
+		orbit planet_orbit = create_planet_orbit(&s, orbit_num);
+		s.planets[i] = create_planet(exp_mass, &planet_orbit);
 	}
 
 	return s;
@@ -673,6 +742,16 @@ int find_settlement(byte nation_index, const system_group* systems, settlement_g
 		if(sat->surface == satellite_surface_gas)
 			continue;
 
+		if(sat->atmosphere != satellite_atmosphere_oxygen)
+			continue;
+
+		const satellite* primary = NULL;
+		if(moon_index != 0xff)
+			primary = &planet->planet;
+		int temperature = satellite_temperature(sat, primary, star);
+		if(temperature < 100 || temperature > 400)
+			continue;
+
 		if(sat->mass < 0.1f)
 			continue;
 
@@ -729,6 +808,15 @@ void create_settlement_collection(byte num_nations, const system_group* systems,
 
 #define NUM_NATIONS			4
 
+void write_satellite_info(const satellite* s, int temperature, char buf[static 256])
+{
+	snprintf(buf, 255, "%5.2f AU, %5d degrees, %5.2f earth masses", 
+			s->orbit.semimajor_axis,
+			temperature - 273,
+			s->mass);
+	buf[255] = 0;
+}
+
 int main(void)
 {
 	mysrand(21);
@@ -742,6 +830,7 @@ int main(void)
 
 	nation nations[NUM_NATIONS];
 	settlement_group settlements;
+	settlements.num_settlements = 0;
 
 	for(int i = 0; i < NUM_NATIONS; i++) {
 		nations[i] = create_nation(i);
@@ -756,13 +845,22 @@ int main(void)
 				star_class_to_string(s->star.class), s->star.temperature);
 		for(int j = 0; j < s->star.num_planets; j++) {
 			planet* p = &s->star.planets[j];
-			printf("\tPlanet %d: %s (%3.2f earth masses)\n",
+			char planet_info[256];
+			write_satellite_info(&p->planet,
+					satellite_temperature(&p->planet, NULL, &s->star),
+					planet_info);
+			printf("\tPlanet %d: %-50s (%s)\n",
 					j + 1, satellite_description(&p->planet),
-					p->planet.mass);
+					planet_info);
 			for(int k = 0; k < p->num_moons; k++) {
-				printf("\t\tMoon %d: %s (%3.2f earth masses)\n",
+				char moon_info[256];
+				const satellite* moon = &p->moons[k];
+				write_satellite_info(moon,
+						satellite_temperature(moon, &p->planet, &s->star),
+						moon_info);
+				printf("\t\tMoon %d: %-44s (%s)\n",
 						k + 1, satellite_description(&p->moons[k]),
-						p->moons[k].mass);
+						moon_info);
 			}
 		}
 	}
