@@ -58,6 +58,29 @@ nation create_nation(int i)
 	return n;
 }
 
+const settlement* settlement_in(const locator* loc, const settlement_group* settlements)
+{
+	assert(loc);
+	assert(settlements);
+	for(int j = 0; j < settlements->num_settlements; j++) {
+		if(settlements->settlements[j].locator.system != loc->system)
+			continue;
+
+		if(settlements->settlements[j].locator.star != 0)
+			continue;
+
+		if(settlements->settlements[j].locator.planet != loc->planet)
+			continue;
+
+		if(settlements->settlements[j].locator.moon != loc->moon)
+			continue;
+
+		return &settlements->settlements[j];
+	}
+
+	return NULL;
+}
+
 /* adds a new settlements in settlements[settlements->num_settlements]. */
 /* returns 1 if found and added, or 0 if not found. */
 static int find_settlement(byte nation_index, const system_group* systems, settlement_group* settlements)
@@ -99,33 +122,17 @@ static int find_settlement(byte nation_index, const system_group* systems, settl
 			continue;
 
 		/* check if already populated */
-		int populated = 0;
-		for(int j = 0; j < settlements->num_settlements; j++) {
-			if(settlements->settlements[j].locator.system != sys_index)
-				continue;
-
-			if(settlements->settlements[j].locator.star != 0)
-				continue;
-
-			if(settlements->settlements[j].locator.planet != planet_index)
-				continue;
-
-			if(settlements->settlements[j].locator.moon != moon_index)
-				continue;
-
-			populated = 1;
-			break;
+		locator loc;
+		loc.system = sys_index;
+		loc.star = 0;
+		loc.planet = planet_index;
+		loc.moon = moon_index;
+		if(settlement_in(&loc, settlements)) {
+			continue;
 		}
 
-		if(populated)
-			continue;
-
 		settlement* s = &settlements->settlements[settlements->num_settlements];
-		s->locator.system = sys_index;
-		s->locator.star   = 0;
-		s->locator.planet = planet_index;
-		s->locator.moon   = moon_index;
-		s->nation_index   = nation_index;
+		s->locator = loc;
 		s->size = 1;
 		s->wealth = 1;
 		s->industrial = 0;

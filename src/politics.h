@@ -44,6 +44,7 @@ typedef struct settlement_group {
 
 nation create_nation(int i);
 void create_settlement_collection(byte num_nations, const system_group* systems, settlement_group* settlements);
+const settlement* settlement_in(const locator* loc, const settlement_group* settlements);
 
 #endif
 

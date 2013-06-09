@@ -1,4 +1,6 @@
 #include <stdio.h>
+#include <string.h>
+#include <stdlib.h>
 
 #include "random.h"
 #include "namegen.h"
@@ -21,7 +23,7 @@ typedef struct sector {
 	system_group systems;
 } sector;
 
-#define MAX_NUM_SECTORS 4
+#define MAX_NUM_SECTORS 1
 
 typedef struct star_group {
 	int num_sectors;
@@ -94,6 +96,59 @@ void print_complete_info(const star_group* sc)
 	}
 }
 
+typedef struct player_info {
+	char name[32];
+	byte difficulty_level;
+	byte nationality;
+	uint32_t money;
+	unsigned int sector;
+	locator location;
+} player_info;
+
+typedef struct game {
+	star_group sc;
+	player_info player;
+} game;
+
+void print_game_info(const game* game)
+{
+	assert(game);
+	const player_info* p = &game->player;
+	assert(p->sector < game->sc.num_sectors);
+
+	printf("Player %s with %u gold.\n\n", p->name,
+			p->money);
+
+	const locator* loc = &p->location;
+	const sector* sec = &game->sc.sectors[p->sector];
+	assert(loc->system < sec->systems.num_systems);
+	const system_t* sys = &sec->systems.systems[loc->system];
+	assert(loc->planet < sys->star.num_planets);
+	const planet* planet = &sys->star.planets[loc->planet];
+	const satellite* sat;
+	char sat_description[16];
+	if(loc->moon != 0xff) {
+		assert(loc->moon < planet->num_moons);
+		sat = &planet->moons[loc->moon];
+		sprintf(sat_description, "%d%c", loc->planet + 1,
+				loc->moon + 'a');
+	} else {
+		sat = &planet->planet;
+		sprintf(sat_description, "%d", loc->planet + 1);
+	}
+	const settlement* set = settlement_in(loc, &sec->settlements);
+	byte owner = 0xff;
+	if(set)
+		owner = set->nation_index;
+	printf("In system %s, planet %s, ", sys->name, sat_description);
+	if(owner == 0xff) {
+		printf("alone.\n");
+	} else {
+		printf("settlement controlled by the %ss.\n",
+				game->sc.nations[owner].name);
+	}
+}
+
 int main(void)
 {
 	mysrand(21);
@@ -101,13 +156,23 @@ int main(void)
 		return 1;
 	}
 	
-	star_group sc;
+	game game;
+	create_star_group(&game.sc);
 
-	create_star_group(&sc);
+	printf("Size of the star cluster: %zd\n", sizeof(game.sc));
 
-	printf("Size of the star cluster: %zd\n", sizeof(sc));
+	memset(&game.player, 0x00, sizeof(game.player));
+	const char* username = getenv("USER");
+	if(username)
+		strncpy(game.player.name, username, 31);
+	else
+		strcpy(game.player.name, "unknown hero");
 
-	print_complete_info(&sc);
+	game.player.money = 1000;
+	game.player.location = game.sc.sectors[0].settlements.settlements[0].locator;
+
+	print_game_info(&game);
+
 	return 0;
 }
 
