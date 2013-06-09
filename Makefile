@@ -13,7 +13,7 @@ BINDIR    = bin
 MAINNAME    = main
 MAINBIN     = $(BINDIR)/$(MAINNAME)
 MAINSRCDIR  = src
-MAINSRCFILES = main.c
+MAINSRCFILES = random.c namegen.c space.c politics.c main.c
 
 MAINSRCS = $(addprefix $(MAINSRCDIR)/, $(MAINSRCFILES))
 MAINOBJS = $(MAINSRCS:.c=.o)
