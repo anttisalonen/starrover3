@@ -56,7 +56,7 @@ typedef struct star {
 	float mass;   // unit: solar mass
 	float luminosity; // unit: solar luminosity
 	uint32_t temperature; // unit: kelvin
-	star_class class;
+	star_class sclass;
 	byte num_planets;
 	planet planets[MAX_PLANETS_AROUND_STAR];
 } star;

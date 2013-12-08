@@ -1,3 +1,5 @@
 bin/
 *.dep
 *.o
+build/
+tags

@@ -9,7 +9,7 @@
 
 #define NUM_NATIONS			4
 
-void write_satellite_info(const satellite* s, int temperature, char buf[static 256])
+void write_satellite_info(const satellite* s, int temperature, char *buf)
 {
 	snprintf(buf, 255, "%5.2f AU, %5d degrees, %5.2f earth masses", 
 			s->orbit.semimajor_axis,
@@ -59,7 +59,7 @@ void print_complete_info(const star_group* sc)
 			const system_t* s = &systems->systems[i];
 			printf("System %d: '%s' at %d, %d with a %s star at %d degrees\n",
 					i + 1, s->name, s->coord.x, s->coord.y,
-					star_class_to_string(s->star.class), s->star.temperature);
+					star_class_to_string(s->star.sclass), s->star.temperature);
 			for(int j = 0; j < s->star.num_planets; j++) {
 				const planet* p = &s->star.planets[j];
 				char planet_info[256];

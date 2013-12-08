@@ -97,8 +97,9 @@ static satellite create_satellite(float expected_mass, const orbit* o)
 		} else {
 			int r = myrandi(satellite_atmosphere_nitrogen - 1);
 			r++;
-			assert(r > satellite_atmosphere_none);
-			p.atmosphere = r;
+			auto a = satellite_atmosphere(r);
+			assert(a > satellite_atmosphere_none);
+			p.atmosphere = a;
 			p.atmospheric_pressure = p.mass;
 		}
 	}
@@ -224,9 +225,9 @@ static star_class create_star_class(void)
 static star create_star(void)
 {
 	star s;
-	s.class = create_star_class();
+	s.sclass = create_star_class();
 
-	switch(s.class) {
+	switch(s.sclass) {
 		case star_class_o:
 			s.radius      = myrandf_uniform(5, 15);
 			s.mass        = s.radius * myrandf_uniform(4.8f, 5.2f);
@@ -322,8 +323,7 @@ static system_coord create_system_coord(void)
 	return s;
 }
 
-/* C99 6.7.5.3.7 (thanks Erlend) */
-static void create_system_name(char name[static 16])
+static void create_system_name(char *name)
 {
 	memset(name, 0x00, 16);
 	int name_len = myrandi(10) + 4;
