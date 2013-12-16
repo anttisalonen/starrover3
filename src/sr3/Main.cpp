@@ -1,5 +1,6 @@
 #include <cassert>
 #include <string>
+#include <vector>
 
 #include "common/SDL_utils.h"
 #include "common/DriverFramework.h"
@@ -11,30 +12,127 @@ using namespace Common;
 
 class SpaceShip : public Entity {
 	public:
+		bool isAlive() const { return mAlive; }
+		void setAlive(bool b) { mAlive = b; }
+
 		float Scale = 10.0f;
 		float EnginePower = 1000.0f;
 		float Thrust = 0.0f;
 		float SidePower = 2.0f;
 		float SideThrust = 0.0f;
+		Color Color;
+
+	private:
+		bool mAlive = true;
 };
+
+class LaserShot : public Entity {
+	public:
+		LaserShot(const SpaceShip* shooter);
+		bool testHit(const SpaceShip* other);
+
+	private:
+		const SpaceShip* mShooter;
+};
+
+LaserShot::LaserShot(const SpaceShip* shooter)
+	: mShooter(shooter)
+{
+	setVelocity(shooter->getVelocity());
+	auto rot = shooter->getXYRotation();
+	Vector3 dir(sin(-rot), cos(-rot), 0.0f);
+	setXYRotation(rot);
+	setVelocity(shooter->getVelocity() + dir * 1000.0f);
+	setPosition(shooter->getPosition() + getVelocity().normalized() * shooter->Scale);
+}
+
+bool LaserShot::testHit(const SpaceShip* other)
+{
+	if(mShooter == other)
+		return false;
+
+	if(mPosition.distance(other->getPosition()) < other->Scale * 1.0f)
+		return true;
+	return false;
+}
 
 class GameState {
 	public:
 		GameState();
 		SpaceShip& getPlayerShip();
+		std::vector<SpaceShip>& getShips();
+		std::vector<LaserShot>& getShots();
+		void update(float t);
+		void shoot(SpaceShip& s);
 
 	private:
-		SpaceShip mPlayerShip;
+		std::vector<SpaceShip> mSpaceShips;
+		std::vector<LaserShot> mShots;
 };
 
 GameState::GameState()
 {
+	// player
+	mSpaceShips.push_back(SpaceShip());
+	mSpaceShips[0].Color = Color::White;
+	for(int i = 0; i < 3; i++) {
+		mSpaceShips.push_back(SpaceShip());
+		mSpaceShips[i + 1].Color = Color::Red;
+		mSpaceShips[i + 1].setPosition(Vector3(rand() % 100 - 50, rand() % 100 - 50, 0.0f));
+	}
+}
+
+void GameState::update(float t)
+{
+	for(auto& ps : mSpaceShips) {
+		for(auto it = mShots.begin(); it != mShots.end(); ) {
+			if(it->testHit(&ps)) {
+				if(ps.isAlive()) {
+					it = mShots.erase(it);
+					ps.setAlive(false);
+				} else {
+					++it;
+				}
+			} else {
+				++it;
+			}
+		}
+
+		if(ps.isAlive()) {
+			auto rot = ps.getXYRotation();
+			ps.setAcceleration(Vector3(ps.Thrust * ps.EnginePower * sin(-rot),
+						ps.Thrust * ps.EnginePower * cos(-rot), 0.0f));
+			ps.setXYRotationalVelocity(ps.SidePower * ps.SideThrust);
+		}
+		ps.update(t);
+	}
+
+	for(auto& ls : mShots) {
+		ls.update(t);
+	}
+}
+
+std::vector<LaserShot>& GameState::getShots()
+{
+	return mShots;
+}
+
+void GameState::shoot(SpaceShip& s)
+{
+	mShots.push_back(LaserShot(&s));
 }
 
 SpaceShip& GameState::getPlayerShip()
 {
-	return mPlayerShip;
+	assert(mSpaceShips.size() > 0);
+	return mSpaceShips[0];
 }
+
+std::vector<SpaceShip>& GameState::getShips()
+{
+	return mSpaceShips;
+}
+
 
 enum class AppDriverState {
 	MainMenu,
@@ -95,18 +193,36 @@ void AppDriver::drawMainMenu()
 void AppDriver::drawSpace()
 {
 	glDisable(GL_TEXTURE_2D);
-	auto& ps = mGameState.getPlayerShip();
-	glPushMatrix();
-	glColor4ub(255, 255, 255, 255);
-	glTranslatef(ps.getPosition().x - mCamera.x, ps.getPosition().y - mCamera.y, 0.0f);
-	glRotatef(Math::radiansToDegrees(ps.getXYRotation()), 0.0f, 0.0f, 1.0f);
-	glScalef(ps.Scale, ps.Scale, 1.0f);
-	glBegin(GL_TRIANGLES);
-	glVertex2f( 0.0f,  1.0f);
-	glVertex2f(-0.7f, -1.0f);
-	glVertex2f( 0.7f, -1.0f);
-	glEnd();
-	glPopMatrix();
+	for(const auto& ps : mGameState.getShips()) {
+		glPushMatrix();
+		if(ps.isAlive())
+			glColor4ub(ps.Color.r, ps.Color.g, ps.Color.b, 255);
+		else
+			glColor4ub(50, 0, 0, 255);
+		glTranslatef(ps.getPosition().x - mCamera.x, ps.getPosition().y - mCamera.y, 0.0f);
+		glRotatef(Math::radiansToDegrees(ps.getXYRotation()), 0.0f, 0.0f, 1.0f);
+		glScalef(ps.Scale, ps.Scale, 1.0f);
+		glBegin(GL_TRIANGLES);
+		glVertex2f( 0.0f,  1.0f);
+		glVertex2f(-0.7f, -1.0f);
+		glVertex2f( 0.7f, -1.0f);
+		glEnd();
+		glPopMatrix();
+	}
+
+	glLineWidth(3.0f);
+	for(const auto& ls : mGameState.getShots()) {
+		glPushMatrix();
+		glColor4ub(255, 0, 0, 255);
+		glTranslatef(ls.getPosition().x - mCamera.x, ls.getPosition().y - mCamera.y, 0.0f);
+		glRotatef(Math::radiansToDegrees(ls.getXYRotation()), 0.0f, 0.0f, 1.0f);
+		glBegin(GL_LINES);
+		glVertex2f( 0.0f,  6.0f);
+		glVertex2f( 0.0f, -6.0f);
+		glEnd();
+		glPopMatrix();
+	}
+	glLineWidth(1.0f);
 }
 
 void AppDriver::drawFrame()
@@ -141,6 +257,9 @@ bool AppDriver::handleKeyDown(float frameTime, SDLKey key)
 {
 	if(mState == AppDriverState::Space)
 		return handleSpaceKey(key, true);
+
+	else if(mState == AppDriverState::MainMenu && key == SDLK_ESCAPE)
+		return true;
 
 	return false;
 }
@@ -195,6 +314,10 @@ bool AppDriver::handleSpaceKey(SDLKey key, bool down)
 		case SDLK_ESCAPE:
 			return true;
 
+		case SDLK_SPACE:
+			if(down)
+				mGameState.shoot(mGameState.getPlayerShip());
+
 		default:
 			break;
 	}
@@ -205,12 +328,7 @@ bool AppDriver::handleSpaceKey(SDLKey key, bool down)
 bool AppDriver::prerenderUpdate(float frameTime)
 {
 	if(mState == AppDriverState::Space) {
-		auto& ps = mGameState.getPlayerShip();
-		auto rot = ps.getXYRotation();
-		ps.setAcceleration(Vector3(ps.Thrust * ps.EnginePower * sin(-rot),
-					ps.Thrust * ps.EnginePower * cos(-rot), 0.0f));
-		ps.setXYRotationalVelocity(ps.SidePower * ps.SideThrust);
-		ps.update(frameTime);
+		mGameState.update(frameTime);
 	}
 	return false;
 }
