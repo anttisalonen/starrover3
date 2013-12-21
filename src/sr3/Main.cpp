@@ -192,6 +192,8 @@ void AppDriver::drawMainMenu()
 
 void AppDriver::drawSpace()
 {
+	auto width = getScreenWidth();
+	auto height = getScreenHeight();
 	glDisable(GL_TEXTURE_2D);
 	for(const auto& ps : mGameState.getShips()) {
 		glPushMatrix();
@@ -199,7 +201,7 @@ void AppDriver::drawSpace()
 			glColor4ub(ps.Color.r, ps.Color.g, ps.Color.b, 255);
 		else
 			glColor4ub(50, 0, 0, 255);
-		glTranslatef(ps.getPosition().x - mCamera.x, ps.getPosition().y - mCamera.y, 0.0f);
+		glTranslatef(ps.getPosition().x - mCamera.x + width * 0.5f, ps.getPosition().y - mCamera.y + height * 0.5f, 0.0f);
 		glRotatef(Math::radiansToDegrees(ps.getXYRotation()), 0.0f, 0.0f, 1.0f);
 		glScalef(ps.Scale, ps.Scale, 1.0f);
 		glBegin(GL_TRIANGLES);
@@ -214,7 +216,7 @@ void AppDriver::drawSpace()
 	for(const auto& ls : mGameState.getShots()) {
 		glPushMatrix();
 		glColor4ub(255, 0, 0, 255);
-		glTranslatef(ls.getPosition().x - mCamera.x, ls.getPosition().y - mCamera.y, 0.0f);
+		glTranslatef(ls.getPosition().x - mCamera.x + width * 0.5f, ls.getPosition().y - mCamera.y + height * 0.5f, 0.0f);
 		glRotatef(Math::radiansToDegrees(ls.getXYRotation()), 0.0f, 0.0f, 1.0f);
 		glBegin(GL_LINES);
 		glVertex2f( 0.0f,  6.0f);
@@ -329,6 +331,9 @@ bool AppDriver::prerenderUpdate(float frameTime)
 {
 	if(mState == AppDriverState::Space) {
 		mGameState.update(frameTime);
+		auto& ps = mGameState.getPlayerShip();
+		mCamera.x = ps.getPosition().x;
+		mCamera.y = ps.getPosition().y;
 	}
 	return false;
 }
