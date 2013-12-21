@@ -257,11 +257,22 @@ bool AppDriver::handleMousePress(float frameTime, Uint8 button)
 
 bool AppDriver::handleKeyDown(float frameTime, SDLKey key)
 {
-	if(mState == AppDriverState::Space)
+	if(mState == AppDriverState::Space) {
 		return handleSpaceKey(key, true);
+	} else if(mState == AppDriverState::MainMenu) {
+		switch(key) {
+			case SDLK_ESCAPE:
+				return true;
 
-	else if(mState == AppDriverState::MainMenu && key == SDLK_ESCAPE)
-		return true;
+			case SDLK_SPACE:
+			case SDLK_RETURN:
+				mState = AppDriverState::Space;
+				break;
+
+			default:
+				break;
+		}
+	}
 
 	return false;
 }
