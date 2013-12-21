@@ -7,13 +7,16 @@
 #include "common/FontConfig.h"
 #include "common/Math.h"
 #include "common/Entity.h"
+#include "common/Clock.h"
 
 using namespace Common;
 
 class SpaceShip : public Entity {
 	public:
+		SpaceShip(bool players) : mPlayers(players) { }
 		bool isAlive() const { return mAlive; }
 		void setAlive(bool b) { mAlive = b; }
+		bool isPlayer() const { return mPlayers; }
 
 		float Scale = 10.0f;
 		float EnginePower = 1000.0f;
@@ -24,6 +27,7 @@ class SpaceShip : public Entity {
 
 	private:
 		bool mAlive = true;
+		bool mPlayers;
 };
 
 class LaserShot : public Entity {
@@ -60,9 +64,12 @@ class GameState {
 	public:
 		GameState();
 		SpaceShip& getPlayerShip();
+		const SpaceShip& getPlayerShip() const;
+		const std::vector<SpaceShip>& getShips() const;
 		std::vector<SpaceShip>& getShips();
 		std::vector<LaserShot>& getShots();
 		void update(float t);
+		void endCombat();
 		void shoot(SpaceShip& s);
 
 	private:
@@ -73,10 +80,10 @@ class GameState {
 GameState::GameState()
 {
 	// player
-	mSpaceShips.push_back(SpaceShip());
+	mSpaceShips.push_back(SpaceShip(true));
 	mSpaceShips[0].Color = Color::White;
 	for(int i = 0; i < 3; i++) {
-		mSpaceShips.push_back(SpaceShip());
+		mSpaceShips.push_back(SpaceShip(false));
 		mSpaceShips[i + 1].Color = Color::Red;
 		mSpaceShips[i + 1].setPosition(Vector3(rand() % 100 - 50, rand() % 100 - 50, 0.0f));
 	}
@@ -112,6 +119,17 @@ void GameState::update(float t)
 	}
 }
 
+void GameState::endCombat()
+{
+	for(auto it = mSpaceShips.begin(); it != mSpaceShips.end(); ) {
+		if(it->isPlayer())
+			++it;
+		else
+			it = mSpaceShips.erase(it);
+	}
+	mShots.clear();
+}
+
 std::vector<LaserShot>& GameState::getShots()
 {
 	return mShots;
@@ -122,10 +140,21 @@ void GameState::shoot(SpaceShip& s)
 	mShots.push_back(LaserShot(&s));
 }
 
+const SpaceShip& GameState::getPlayerShip() const
+{
+	assert(mSpaceShips.size() > 0);
+	return mSpaceShips[0];
+}
+
 SpaceShip& GameState::getPlayerShip()
 {
 	assert(mSpaceShips.size() > 0);
 	return mSpaceShips[0];
+}
+
+const std::vector<SpaceShip>& GameState::getShips() const
+{
+	return mSpaceShips;
 }
 
 std::vector<SpaceShip>& GameState::getShips()
@@ -136,7 +165,14 @@ std::vector<SpaceShip>& GameState::getShips()
 
 enum class AppDriverState {
 	MainMenu,
-	Space
+	SpaceCombat,
+	CombatWon,
+	SolarSystem
+};
+
+enum class CutsceneText {
+	AllEnemyShot,
+	EvadedEnemy
 };
 
 class AppDriver : public Driver {
@@ -154,18 +190,23 @@ class AppDriver : public Driver {
 	private:
 		void drawMainMenu();
 		void drawSpace();
+		void drawCutscene();
 		bool handleSpaceKey(SDLKey key, bool down);
+		bool checkCombat();
 
 		TTF_Font* mFont;
 		TextMap mTextMap;
 		AppDriverState mState = AppDriverState::MainMenu;
 		GameState mGameState;
 		Vector2 mCamera;
+		SteadyTimer mCheckCombatTimer;
+		CutsceneText mText;
 };
 
 AppDriver::AppDriver()
 	: Driver(1280, 720, "Star Rover 3"),
-	mCamera(-300.0f, -300.0f)
+	mCamera(-300.0f, -300.0f),
+	mCheckCombatTimer(0.5f)
 {
 	mFont = TTF_OpenFont("share/DejaVuSans.ttf", 36);
 	assert(mFont);
@@ -227,6 +268,25 @@ void AppDriver::drawSpace()
 	glLineWidth(1.0f);
 }
 
+void AppDriver::drawCutscene()
+{
+	const char* text = nullptr;
+	switch(mText) {
+		case CutsceneText::AllEnemyShot:
+			text = "You shot all enemy! Hooray!";
+			break;
+
+		case CutsceneText::EvadedEnemy:
+			text = "You managed to escape from the evil enemy. You'll commence exploring the solar system now.";
+			break;
+	}
+
+	SDL_utils::drawText(mTextMap, mFont, Vector3(0.0f, 0.0f, 0.0f), 1.0f,
+			getScreenWidth(), getScreenHeight(),
+			getScreenWidth() * 0.5f, getScreenHeight() * 0.9f, FontConfig(text, Color::White, 1.0f),
+			true, true);
+}
+
 void AppDriver::drawFrame()
 {
 	switch(mState) {
@@ -234,8 +294,13 @@ void AppDriver::drawFrame()
 			drawMainMenu();
 			break;
 
-		case AppDriverState::Space:
+		case AppDriverState::SpaceCombat:
+		case AppDriverState::SolarSystem:
 			drawSpace();
+			break;
+
+		case AppDriverState::CombatWon:
+			drawCutscene();
 			break;
 	}
 }
@@ -245,11 +310,18 @@ bool AppDriver::handleMousePress(float frameTime, Uint8 button)
 	switch(mState) {
 		case AppDriverState::MainMenu:
 			if(button == SDL_BUTTON_LEFT) {
-				mState = AppDriverState::Space;
+				mState = AppDriverState::SpaceCombat;
 			}
 			break;
 
-		case AppDriverState::Space:
+		case AppDriverState::SpaceCombat:
+		case AppDriverState::SolarSystem:
+			break;
+
+		case AppDriverState::CombatWon:
+			if(button == SDL_BUTTON_LEFT) {
+				mState = AppDriverState::SolarSystem;
+			}
 			break;
 	}
 	return false;
@@ -257,21 +329,37 @@ bool AppDriver::handleMousePress(float frameTime, Uint8 button)
 
 bool AppDriver::handleKeyDown(float frameTime, SDLKey key)
 {
-	if(mState == AppDriverState::Space) {
-		return handleSpaceKey(key, true);
-	} else if(mState == AppDriverState::MainMenu) {
-		switch(key) {
-			case SDLK_ESCAPE:
-				return true;
+	switch(mState) {
+		case AppDriverState::SpaceCombat:
+		case AppDriverState::SolarSystem:
+			return handleSpaceKey(key, true);
 
-			case SDLK_SPACE:
-			case SDLK_RETURN:
-				mState = AppDriverState::Space;
-				break;
+		case AppDriverState::MainMenu:
+			switch(key) {
+				case SDLK_ESCAPE:
+					return true;
 
-			default:
-				break;
-		}
+				case SDLK_SPACE:
+				case SDLK_RETURN:
+					mState = AppDriverState::SpaceCombat;
+					break;
+
+				default:
+					break;
+			}
+			break;
+
+		case AppDriverState::CombatWon:
+			switch(key) {
+				case SDLK_SPACE:
+				case SDLK_RETURN:
+					mState = AppDriverState::SolarSystem;
+					break;
+
+				default:
+					break;
+			}
+			break;
 	}
 
 	return false;
@@ -279,7 +367,7 @@ bool AppDriver::handleKeyDown(float frameTime, SDLKey key)
 
 bool AppDriver::handleKeyUp(float frameTime, SDLKey key)
 {
-	if(mState == AppDriverState::Space)
+	if(mState == AppDriverState::SpaceCombat || mState == AppDriverState::SolarSystem)
 		return handleSpaceKey(key, false);
 
 	return false;
@@ -328,7 +416,7 @@ bool AppDriver::handleSpaceKey(SDLKey key, bool down)
 			return true;
 
 		case SDLK_SPACE:
-			if(down)
+			if(down && mState == AppDriverState::SpaceCombat)
 				mGameState.shoot(mGameState.getPlayerShip());
 
 		default:
@@ -340,12 +428,50 @@ bool AppDriver::handleSpaceKey(SDLKey key, bool down)
 
 bool AppDriver::prerenderUpdate(float frameTime)
 {
-	if(mState == AppDriverState::Space) {
+	if(mState == AppDriverState::SpaceCombat || mState == AppDriverState::SolarSystem) {
 		mGameState.update(frameTime);
 		auto& ps = mGameState.getPlayerShip();
 		mCamera.x = ps.getPosition().x;
 		mCamera.y = ps.getPosition().y;
+
+		if(mState == AppDriverState::SpaceCombat) {
+			if(mCheckCombatTimer.check(frameTime)) {
+				if(checkCombat()) {
+					mGameState.endCombat();
+				}
+			}
+		}
 	}
+	return false;
+}
+
+bool AppDriver::checkCombat()
+{
+	int numOpponents = 0;
+	int numNearbyOpponents = 0;
+	const auto& ps = mGameState.getPlayerShip();
+	for(const auto& ss : mGameState.getShips()) {
+		if(ss.isPlayer())
+			continue;
+
+		if(ss.isAlive()) {
+			numOpponents++;
+			if(Entity::distanceBetween(ps, ss) < 500.0f)
+				numNearbyOpponents++;
+		}
+	}
+
+	if(numNearbyOpponents == 0) {
+		mState = AppDriverState::CombatWon;
+
+		if(numOpponents == 0)
+			mText = CutsceneText::AllEnemyShot;
+		else
+			mText = CutsceneText::EvadedEnemy;
+
+		return true;
+	}
+
 	return false;
 }
 
