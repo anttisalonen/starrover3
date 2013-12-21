@@ -13,10 +13,11 @@ using namespace Common;
 
 class SpaceShip : public Entity {
 	public:
-		SpaceShip(bool players) : mPlayers(players) { }
+		SpaceShip(bool players);
 		bool isAlive() const { return mAlive; }
 		void setAlive(bool b) { mAlive = b; }
 		bool isPlayer() const { return mPlayers; }
+		virtual void update(float time) override;
 
 		float Scale = 10.0f;
 		float EnginePower = 1000.0f;
@@ -29,6 +30,23 @@ class SpaceShip : public Entity {
 		bool mAlive = true;
 		bool mPlayers;
 };
+
+SpaceShip::SpaceShip(bool players)
+	: mPlayers(players)
+{
+	Color = mPlayers ? Color::White : Color::Red;
+}
+
+void SpaceShip::update(float time)
+{
+	if(isAlive()) {
+		auto rot = getXYRotation();
+		setAcceleration(Vector3(Thrust * EnginePower * sin(-rot),
+					Thrust * EnginePower * cos(-rot), 0.0f));
+		setXYRotationalVelocity(SidePower * SideThrust);
+	}
+	Entity::update(time);
+}
 
 class LaserShot : public Entity {
 	public:
@@ -110,7 +128,8 @@ class GameState {
 		void shoot(SpaceShip& s);
 
 	private:
-		std::vector<SpaceShip> mSpaceShips;
+		std::vector<SpaceShip> mCombatShips;
+		std::vector<SpaceShip> mSolarShips;
 		std::vector<LaserShot> mShots;
 		bool mSolar = false;
 		SolarSystem mSystem;
@@ -119,58 +138,49 @@ class GameState {
 GameState::GameState()
 {
 	// player
-	mSpaceShips.push_back(SpaceShip(true));
-	mSpaceShips[0].Color = Color::White;
+	mCombatShips.push_back(SpaceShip(true));
 	for(int i = 0; i < 3; i++) {
-		mSpaceShips.push_back(SpaceShip(false));
-		mSpaceShips[i + 1].Color = Color::Red;
-		mSpaceShips[i + 1].setPosition(Vector3(rand() % 100 - 50, rand() % 100 - 50, 0.0f));
+		mCombatShips.push_back(SpaceShip(false));
+		mCombatShips[i + 1].setPosition(Vector3(rand() % 100 - 50, rand() % 100 - 50, 0.0f));
 	}
+	SpaceShip ss(true);
+	ss.setPosition(Vector3(200.0f, 200.0f, 0.0f));
+	mSolarShips.push_back(ss);
 }
 
 void GameState::update(float t)
 {
-	for(auto& ps : mSpaceShips) {
-		for(auto it = mShots.begin(); it != mShots.end(); ) {
-			if(it->testHit(&ps)) {
-				if(ps.isAlive()) {
-					it = mShots.erase(it);
-					ps.setAlive(false);
+	if(!mSolar) {
+		for(auto& ps : mCombatShips) {
+			for(auto it = mShots.begin(); it != mShots.end(); ) {
+				if(it->testHit(&ps)) {
+					if(ps.isAlive()) {
+						it = mShots.erase(it);
+						ps.setAlive(false);
+					} else {
+						++it;
+					}
 				} else {
 					++it;
 				}
-			} else {
-				++it;
 			}
+			ps.update(t);
 		}
 
-		if(ps.isAlive()) {
-			auto rot = ps.getXYRotation();
-			ps.setAcceleration(Vector3(ps.Thrust * ps.EnginePower * sin(-rot),
-						ps.Thrust * ps.EnginePower * cos(-rot), 0.0f));
-			ps.setXYRotationalVelocity(ps.SidePower * ps.SideThrust);
+		for(auto& ls : mShots) {
+			ls.update(t);
 		}
-		ps.update(t);
-	}
-
-	for(auto& ls : mShots) {
-		ls.update(t);
+	} else {
+		for(auto& ps : mSolarShips) {
+			ps.update(t);
+		}
 	}
 }
 
 void GameState::endCombat()
 {
 	assert(!mSolar);
-	for(auto it = mSpaceShips.begin(); it != mSpaceShips.end(); ) {
-		if(it->isPlayer()) {
-			it->setPosition(Vector3());
-			it->setVelocity(Vector3());
-			it->setAcceleration(Vector3());
-			++it;
-		} else {
-			it = mSpaceShips.erase(it);
-		}
-	}
+	mCombatShips.clear();
 	mShots.clear();
 	mSolar = true;
 }
@@ -187,24 +197,34 @@ void GameState::shoot(SpaceShip& s)
 
 const SpaceShip& GameState::getPlayerShip() const
 {
-	assert(mSpaceShips.size() > 0);
-	return mSpaceShips[0];
+	if(!mSolar) {
+		assert(mCombatShips.size() > 0);
+		return mCombatShips[0];
+	} else {
+		assert(mSolarShips.size() > 0);
+		return mSolarShips[0];
+	}
 }
 
 SpaceShip& GameState::getPlayerShip()
 {
-	assert(mSpaceShips.size() > 0);
-	return mSpaceShips[0];
+	if(!mSolar) {
+		assert(mCombatShips.size() > 0);
+		return mCombatShips[0];
+	} else {
+		assert(mSolarShips.size() > 0);
+		return mSolarShips[0];
+	}
 }
 
 const std::vector<SpaceShip>& GameState::getShips() const
 {
-	return mSpaceShips;
+	return mSolar ? mSolarShips : mCombatShips;
 }
 
 std::vector<SpaceShip>& GameState::getShips()
 {
-	return mSpaceShips;
+	return mSolar ? mSolarShips : mCombatShips;
 }
 
 
