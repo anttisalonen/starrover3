@@ -81,37 +81,89 @@ bool LaserShot::testHit(const SpaceShip* other)
 class SolarObject : public Entity {
 	public:
 		SolarObject(float size);
+		SolarObject(const SolarObject* center, float size, float orbit, float speed);
 		float getSize() const { return mSize; }
+		virtual void update(float time) override;
 
 	private:
 		float mSize;
+		float mOrbit = 0.0f;
+		float mOrbitPosition = 0.0f;
+		float mSpeed = 0.0f;
+		const SolarObject* mCenter = nullptr;
 };
 
 SolarObject::SolarObject(float size)
-	: mSize(size)
+	: mSize(size * 20.0f)
 {
+}
+
+SolarObject::SolarObject(const SolarObject* center, float size, float orbit, float speed)
+	: mSize(size),
+	mOrbit(orbit * 100000.0f),
+	mOrbitPosition(rand() % 100 * 0.01f),
+	mSpeed(speed * 0.01f),
+	mCenter(center)
+{
+	update(0.0f);
+}
+
+void SolarObject::update(float time)
+{
+	mOrbitPosition += time * mSpeed;
+	auto origo = mCenter ? mCenter->getPosition() : Vector3();
+	mPosition.x = origo.x + mOrbit * sin(mOrbitPosition * PI * 2.0f);
+	mPosition.y = origo.y + mOrbit * cos(mOrbitPosition * PI * 2.0f);
 }
 
 
 class SolarSystem {
 	public:
 		SolarSystem();
-		const std::vector<SolarObject>& getObjects() const;
+		~SolarSystem();
+		SolarSystem(const SolarSystem&) = delete;
+		SolarSystem(const SolarSystem&&) = delete;
+		SolarSystem& operator=(const SolarSystem&) & = delete;
+		SolarSystem& operator=(SolarSystem&&) & = delete;
+
+		const std::vector<SolarObject*>& getObjects() const;
+		void update(float time);
 
 	private:
-		std::vector<SolarObject> mObjects;
+		std::vector<SolarObject*> mObjects;
 };
 
 SolarSystem::SolarSystem()
 {
-	mObjects.push_back(SolarObject(1.0f));
+	auto star = new SolarObject(1.0f);
+	mObjects.push_back(star);
+	mObjects.push_back(new SolarObject(star, 0.5f, 0.3f, 3.0f));
+	mObjects.push_back(new SolarObject(star, 0.9f, 0.5f, 2.0f));
+	auto p1 = new SolarObject(star, 1.0f, 1.0f, 1.0f);
+	auto m1 = new SolarObject(p1, 0.4f, 0.1f, 3.0f);
+	mObjects.push_back(p1);
+	mObjects.push_back(m1);
+	mObjects.push_back(new SolarObject(star, 0.7f, 2.0f, 0.5f));
+	mObjects.push_back(new SolarObject(star, 15.0f, 4.0f, 0.25f));
 }
 
-const std::vector<SolarObject>& SolarSystem::getObjects() const
+SolarSystem::~SolarSystem()
+{
+	for(auto& o : mObjects)
+		delete o;
+}
+
+const std::vector<SolarObject*>& SolarSystem::getObjects() const
 {
 	return mObjects;
 }
 
+void SolarSystem::update(float time)
+{
+	for(auto& o : mObjects) {
+		o->update(time);
+	}
+}
 
 class GameState {
 	public:
@@ -144,7 +196,7 @@ GameState::GameState()
 		mCombatShips[i + 1].setPosition(Vector3(rand() % 100 - 50, rand() % 100 - 50, 0.0f));
 	}
 	SpaceShip ss(true);
-	ss.setPosition(Vector3(200.0f, 200.0f, 0.0f));
+	ss.setPosition(Vector3(20000.0f, 20000.0f, 0.0f));
 	mSolarShips.push_back(ss);
 }
 
@@ -171,6 +223,7 @@ void GameState::update(float t)
 			ls.update(t);
 		}
 	} else {
+		mSystem.update(t);
 		for(auto& ps : mSolarShips) {
 			ps.update(t);
 		}
@@ -266,6 +319,9 @@ class AppDriver : public Driver {
 		Vector2 mCamera;
 		SteadyTimer mCheckCombatTimer;
 		CutsceneText mText;
+		float mZoomSpeed = 0.0f;
+		float mZoom = 1.0f;
+		const float MaxZoomLevel = 0.001f;
 };
 
 AppDriver::AppDriver()
@@ -301,15 +357,19 @@ void AppDriver::drawSpace()
 	auto width = getScreenWidth();
 	auto height = getScreenHeight();
 	glDisable(GL_TEXTURE_2D);
+	Vector3 trdiff(width * 0.5f - mCamera.x * mZoom, height * 0.5f - mCamera.y * mZoom, 0.0f);
+
 	for(const auto& ps : mGameState.getShips()) {
 		glPushMatrix();
 		if(ps.isAlive())
 			glColor4ub(ps.Color.r, ps.Color.g, ps.Color.b, 255);
 		else
 			glColor4ub(50, 0, 0, 255);
-		glTranslatef(ps.getPosition().x - mCamera.x + width * 0.5f, ps.getPosition().y - mCamera.y + height * 0.5f, 0.0f);
+		auto tr = ps.getPosition() * mZoom + trdiff;
+		glTranslatef(tr.x, tr.y, 0.0f);
 		glRotatef(Math::radiansToDegrees(ps.getXYRotation()), 0.0f, 0.0f, 1.0f);
-		glScalef(ps.Scale, ps.Scale, 1.0f);
+		float sc = ps.Scale * pow(mZoom, 0.1f);
+		glScalef(sc, sc, 1.0f);
 		glBegin(GL_TRIANGLES);
 		glVertex2f( 0.0f,  1.0f);
 		glVertex2f(-0.7f, -1.0f);
@@ -322,7 +382,8 @@ void AppDriver::drawSpace()
 	for(const auto& ls : mGameState.getShots()) {
 		glPushMatrix();
 		glColor4ub(255, 0, 0, 255);
-		glTranslatef(ls.getPosition().x - mCamera.x + width * 0.5f, ls.getPosition().y - mCamera.y + height * 0.5f, 0.0f);
+		auto tr = ls.getPosition() * mZoom + trdiff;
+		glTranslatef(tr.x, tr.y, 0.0f);
 		glRotatef(Math::radiansToDegrees(ls.getXYRotation()), 0.0f, 0.0f, 1.0f);
 		glBegin(GL_LINES);
 		glVertex2f( 0.0f,  6.0f);
@@ -336,10 +397,11 @@ void AppDriver::drawSpace()
 		for(const auto& so : mGameState.getSolarSystem().getObjects()) {
 			glPushMatrix();
 			glColor4ub(255, 128, 128, 255);
-			glTranslatef(so.getPosition().x - mCamera.x + width * 0.5f, so.getPosition().y - mCamera.y + height * 0.5f, 0.0f);
-			float s = so.getSize();
-			float points = clamp(8.0f, s * 32.0f, 256.0f);
-			s = s * 100.0f;
+			auto tr = so->getPosition() * mZoom * 1.0f + trdiff;
+			glTranslatef(tr.x, tr.y, 0.0f);
+			float s = so->getSize();
+			float points = clamp(16.0f, s * 8.0f, 128.0f);
+			s = s * mZoom * 500.0f;
 			glBegin(GL_TRIANGLE_FAN);
 			glVertex2f(0.0f,  0.0f);
 			for(int i = 0; i < points + 1; i++) {
@@ -500,6 +562,29 @@ bool AppDriver::handleSpaceKey(SDLKey key, bool down)
 			ps.SideThrust = side;
 			break;
 
+		case SDLK_PLUS:
+			if(mState == AppDriverState::SolarSystem) {
+				if(down)
+					mZoomSpeed = 1.0f;
+				else
+					mZoomSpeed = 0.0f;
+			}
+			break;
+
+		case SDLK_MINUS:
+			if(mState == AppDriverState::SolarSystem) {
+				if(down)
+					mZoomSpeed = -1.0f;
+				else
+					mZoomSpeed = 0.0f;
+			}
+			break;
+
+		case SDLK_m:
+			if(down && mState == AppDriverState::SolarSystem)
+				mZoom = MaxZoomLevel;
+			break;
+
 		case SDLK_ESCAPE:
 			return true;
 
@@ -517,16 +602,19 @@ bool AppDriver::handleSpaceKey(SDLKey key, bool down)
 bool AppDriver::prerenderUpdate(float frameTime)
 {
 	if(mState == AppDriverState::SpaceCombat || mState == AppDriverState::SolarSystem) {
+		mZoom = clamp(MaxZoomLevel, mZoom + 4.0f * mZoom * frameTime * mZoomSpeed, 100.0f);
+
 		mGameState.update(frameTime);
-		auto& ps = mGameState.getPlayerShip();
-		mCamera.x = ps.getPosition().x;
-		mCamera.y = ps.getPosition().y;
 
 		if(mState == AppDriverState::SpaceCombat) {
 			if(mCheckCombatTimer.check(frameTime)) {
 				checkCombat();
 			}
 		}
+
+		auto& ps = mGameState.getPlayerShip();
+		mCamera.x = ps.getPosition().x;
+		mCamera.y = ps.getPosition().y;
 	}
 	return false;
 }
