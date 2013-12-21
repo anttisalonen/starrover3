@@ -60,6 +60,41 @@ bool LaserShot::testHit(const SpaceShip* other)
 	return false;
 }
 
+class SolarObject : public Entity {
+	public:
+		SolarObject(float size);
+		float getSize() const { return mSize; }
+
+	private:
+		float mSize;
+};
+
+SolarObject::SolarObject(float size)
+	: mSize(size)
+{
+}
+
+
+class SolarSystem {
+	public:
+		SolarSystem();
+		const std::vector<SolarObject>& getObjects() const;
+
+	private:
+		std::vector<SolarObject> mObjects;
+};
+
+SolarSystem::SolarSystem()
+{
+	mObjects.push_back(SolarObject(1.0f));
+}
+
+const std::vector<SolarObject>& SolarSystem::getObjects() const
+{
+	return mObjects;
+}
+
+
 class GameState {
 	public:
 		GameState();
@@ -68,6 +103,8 @@ class GameState {
 		const std::vector<SpaceShip>& getShips() const;
 		std::vector<SpaceShip>& getShips();
 		std::vector<LaserShot>& getShots();
+		const SolarSystem& getSolarSystem() const { return mSystem; }
+		bool isSolar() { return mSolar; }
 		void update(float t);
 		void endCombat();
 		void shoot(SpaceShip& s);
@@ -75,6 +112,8 @@ class GameState {
 	private:
 		std::vector<SpaceShip> mSpaceShips;
 		std::vector<LaserShot> mShots;
+		bool mSolar = false;
+		SolarSystem mSystem;
 };
 
 GameState::GameState()
@@ -121,13 +160,19 @@ void GameState::update(float t)
 
 void GameState::endCombat()
 {
+	assert(!mSolar);
 	for(auto it = mSpaceShips.begin(); it != mSpaceShips.end(); ) {
-		if(it->isPlayer())
+		if(it->isPlayer()) {
+			it->setPosition(Vector3());
+			it->setVelocity(Vector3());
+			it->setAcceleration(Vector3());
 			++it;
-		else
+		} else {
 			it = mSpaceShips.erase(it);
+		}
 	}
 	mShots.clear();
+	mSolar = true;
 }
 
 std::vector<LaserShot>& GameState::getShots()
@@ -266,6 +311,24 @@ void AppDriver::drawSpace()
 		glPopMatrix();
 	}
 	glLineWidth(1.0f);
+
+	if(mGameState.isSolar()) {
+		for(const auto& so : mGameState.getSolarSystem().getObjects()) {
+			glPushMatrix();
+			glColor4ub(255, 128, 128, 255);
+			glTranslatef(so.getPosition().x - mCamera.x + width * 0.5f, so.getPosition().y - mCamera.y + height * 0.5f, 0.0f);
+			float s = so.getSize();
+			float points = clamp(8.0f, s * 32.0f, 256.0f);
+			s = s * 100.0f;
+			glBegin(GL_TRIANGLE_FAN);
+			glVertex2f(0.0f,  0.0f);
+			for(int i = 0; i < points + 1; i++) {
+				glVertex2f(sin(2.0f * PI * i / points) * s, cos(2.0f * PI * i / points) * s);
+			}
+			glEnd();
+			glPopMatrix();
+		}
+	}
 }
 
 void AppDriver::drawCutscene()
@@ -441,9 +504,7 @@ bool AppDriver::prerenderUpdate(float frameTime)
 
 		if(mState == AppDriverState::SpaceCombat) {
 			if(mCheckCombatTimer.check(frameTime)) {
-				if(checkCombat()) {
-					mGameState.endCombat();
-				}
+				checkCombat();
 			}
 		}
 	}
@@ -468,6 +529,7 @@ bool AppDriver::checkCombat()
 
 	if(numNearbyOpponents == 0) {
 		mState = AppDriverState::CombatWon;
+		mGameState.endCombat();
 
 		if(numOpponents == 0)
 			mText = CutsceneText::AllEnemyShot;
