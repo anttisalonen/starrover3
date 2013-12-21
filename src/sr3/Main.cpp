@@ -270,21 +270,26 @@ void AppDriver::drawSpace()
 
 void AppDriver::drawCutscene()
 {
-	const char* text = nullptr;
+	std::vector<std::string> text;
 	switch(mText) {
 		case CutsceneText::AllEnemyShot:
-			text = "You shot all enemy! Hooray!";
+			text.push_back("You shot all enemy! Hooray!");
 			break;
 
 		case CutsceneText::EvadedEnemy:
-			text = "You managed to escape from the evil enemy. You'll commence exploring the solar system now.";
+			text.push_back("You managed to escape from the evil enemy.");
+			text.push_back("You'll commence exploring the solar system now.");
 			break;
 	}
 
-	SDL_utils::drawText(mTextMap, mFont, Vector3(0.0f, 0.0f, 0.0f), 1.0f,
-			getScreenWidth(), getScreenHeight(),
-			getScreenWidth() * 0.5f, getScreenHeight() * 0.9f, FontConfig(text, Color::White, 1.0f),
-			true, true);
+	float i = getScreenHeight() * 0.9f;
+	for(auto& t : text) {
+		SDL_utils::drawText(mTextMap, mFont, Vector3(0.0f, 0.0f, 0.0f), 1.0f,
+				getScreenWidth(), getScreenHeight(),
+				getScreenWidth() * 0.5f, i, FontConfig(t.c_str(), Color::White, 1.0f),
+				true, true);
+		i -= 100.0f;
+	}
 }
 
 void AppDriver::drawFrame()
