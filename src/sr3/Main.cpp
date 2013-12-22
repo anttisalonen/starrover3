@@ -78,12 +78,23 @@ bool LaserShot::testHit(const SpaceShip* other)
 	return false;
 }
 
+enum class SOType {
+	Star,
+	GasGiant,
+	RockyNoAtmosphere,
+	RockyOxygen,
+	RockyNitrogen,
+	RockyCarbonDioxide,
+	RockyMethane
+};
+
 class SolarObject : public Entity {
 	public:
 		SolarObject(float size);
-		SolarObject(const SolarObject* center, float size, float orbit, float speed);
+		SolarObject(const SolarObject* center, SOType type, float size, float orbit, float speed);
 		float getSize() const { return mSize; }
 		virtual void update(float time) override;
+		SOType getType() const { return mObjectType; }
 
 	private:
 		float mSize;
@@ -91,19 +102,22 @@ class SolarObject : public Entity {
 		float mOrbitPosition = 0.0f;
 		float mSpeed = 0.0f;
 		const SolarObject* mCenter = nullptr;
+		SOType mObjectType = SOType::GasGiant;
 };
 
 SolarObject::SolarObject(float size)
-	: mSize(size * 20.0f)
+	: mSize(size * 20.0f),
+	mObjectType(SOType::Star)
 {
 }
 
-SolarObject::SolarObject(const SolarObject* center, float size, float orbit, float speed)
+SolarObject::SolarObject(const SolarObject* center, SOType type, float size, float orbit, float speed)
 	: mSize(size),
-	mOrbit(orbit * 100000.0f),
+	mOrbit(orbit * 50000.0f),
 	mOrbitPosition(rand() % 100 * 0.01f),
 	mSpeed(speed * 0.01f),
-	mCenter(center)
+	mCenter(center),
+	mObjectType(type)
 {
 	update(0.0f);
 }
@@ -137,14 +151,33 @@ SolarSystem::SolarSystem()
 {
 	auto star = new SolarObject(1.0f);
 	mObjects.push_back(star);
-	mObjects.push_back(new SolarObject(star, 0.5f, 0.3f, 3.0f));
-	mObjects.push_back(new SolarObject(star, 0.9f, 0.5f, 2.0f));
-	auto p1 = new SolarObject(star, 1.0f, 1.0f, 1.0f);
-	auto m1 = new SolarObject(p1, 0.4f, 0.1f, 3.0f);
+	mObjects.push_back(new SolarObject(star, SOType::RockyNoAtmosphere, 0.5f, 0.4f, 3.0f));
+	mObjects.push_back(new SolarObject(star, SOType::RockyCarbonDioxide, 0.9f, 0.7f, 2.0f));
+	auto p1 = new SolarObject(star, SOType::RockyOxygen, 1.0f, 1.0f, 1.0f);
+	auto m1 = new SolarObject(p1, SOType::RockyNoAtmosphere, 0.4f, 0.1f, 3.0f);
 	mObjects.push_back(p1);
 	mObjects.push_back(m1);
-	mObjects.push_back(new SolarObject(star, 0.7f, 2.0f, 0.5f));
-	mObjects.push_back(new SolarObject(star, 15.0f, 4.0f, 0.25f));
+	mObjects.push_back(new SolarObject(star, SOType::RockyCarbonDioxide, 0.7f, 2.0f, 0.5f));
+	auto p2 = new SolarObject(star, SOType::GasGiant, 15.0f, 4.0f, 0.25f);
+	auto m2 = new SolarObject(p2, SOType::RockyNoAtmosphere, 0.2f, 0.3f, 3.0f);
+	auto m3 = new SolarObject(p2, SOType::RockyNoAtmosphere, 0.2f, 0.4f, 3.0f);
+	auto m4 = new SolarObject(p2, SOType::RockyNoAtmosphere, 0.2f, 0.5f, 3.0f);
+	auto m5 = new SolarObject(p2, SOType::RockyNoAtmosphere, 0.2f, 0.6f, 3.0f);
+	mObjects.push_back(p2);
+	mObjects.push_back(m2);
+	mObjects.push_back(m3);
+	mObjects.push_back(m4);
+	mObjects.push_back(m5);
+	auto p3 = new SolarObject(star, SOType::GasGiant, 10.0f, 8.0f, 0.25f);
+	auto m6 = new SolarObject(p3, SOType::RockyNoAtmosphere, 0.2f, 0.3f, 2.0f);
+	auto m7 = new SolarObject(p3, SOType::RockyNoAtmosphere, 0.2f, 0.4f, 2.0f);
+	auto m8 = new SolarObject(p3, SOType::RockyNoAtmosphere, 0.2f, 0.5f, 2.0f);
+	auto m9 = new SolarObject(p3, SOType::RockyNoAtmosphere, 0.2f, 0.6f, 2.0f);
+	mObjects.push_back(p3);
+	mObjects.push_back(m6);
+	mObjects.push_back(m7);
+	mObjects.push_back(m8);
+	mObjects.push_back(m9);
 }
 
 SolarSystem::~SolarSystem()
@@ -396,7 +429,29 @@ void AppDriver::drawSpace()
 	if(mGameState.isSolar()) {
 		for(const auto& so : mGameState.getSolarSystem().getObjects()) {
 			glPushMatrix();
-			glColor4ub(255, 128, 128, 255);
+			switch(so->getType()) {
+				case SOType::Star:
+					glColor4ub(255, 255, 0, 255);
+					break;
+				case SOType::GasGiant:
+					glColor4ub(255, 128, 128, 255);
+					break;
+				case SOType::RockyNoAtmosphere:
+					glColor4ub(60, 60, 60, 255);
+					break;
+				case SOType::RockyOxygen:
+					glColor4ub(128, 128, 255, 255);
+					break;
+				case SOType::RockyNitrogen:
+					glColor4ub(192, 192, 192, 255);
+					break;
+				case SOType::RockyCarbonDioxide:
+					glColor4ub(255, 0, 0, 255);
+					break;
+				case SOType::RockyMethane:
+					glColor4ub(128, 60, 60, 255);
+					break;
+			}
 			auto tr = so->getPosition() * mZoom * 1.0f + trdiff;
 			glTranslatef(tr.x, tr.y, 0.0f);
 			float s = so->getSize();
@@ -596,13 +651,16 @@ bool AppDriver::handleSpaceKey(SDLKey key, bool down)
 			break;
 	}
 
+	if(mState == AppDriverState::SolarSystem)
+		ps.Thrust = signum(ps.Thrust) * 10.0f;
+
 	return false;
 }
 
 bool AppDriver::prerenderUpdate(float frameTime)
 {
 	if(mState == AppDriverState::SpaceCombat || mState == AppDriverState::SolarSystem) {
-		mZoom = clamp(MaxZoomLevel, mZoom + 4.0f * mZoom * frameTime * mZoomSpeed, 100.0f);
+		mZoom = clamp(MaxZoomLevel, mZoom + 8.0f * mZoom * frameTime * mZoomSpeed, 100.0f);
 
 		mGameState.update(frameTime);
 
