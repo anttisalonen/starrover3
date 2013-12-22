@@ -7,17 +7,34 @@
 #include "common/FontConfig.h"
 #include "common/Math.h"
 #include "common/Entity.h"
+#include "common/Vehicle.h"
+#include "common/Steering.h"
 #include "common/Clock.h"
 
 using namespace Common;
 
-class SpaceShip : public Entity {
+class SpaceShip;
+class SolarObject;
+class SolarSystem;
+
+static const float SolarSystemSpeedCoefficient = 10.0f;
+
+class SpaceShipAI {
 	public:
-		SpaceShip(bool players);
+		void control(SpaceShip* ss);
+
+	private:
+		const SolarObject* mTarget = nullptr;
+};
+
+class SpaceShip : public Vehicle {
+	public:
+		SpaceShip(bool players, const SolarSystem* s);
 		bool isAlive() const { return mAlive; }
 		void setAlive(bool b) { mAlive = b; }
 		bool isPlayer() const { return mPlayers; }
 		virtual void update(float time) override;
+		const SolarSystem* getSystem() const { return mSystem; }
 
 		float Scale = 10.0f;
 		float EnginePower = 1000.0f;
@@ -29,10 +46,14 @@ class SpaceShip : public Entity {
 	private:
 		bool mAlive = true;
 		bool mPlayers;
+		SpaceShipAI mAgent;
+		const SolarSystem* mSystem;
 };
 
-SpaceShip::SpaceShip(bool players)
-	: mPlayers(players)
+SpaceShip::SpaceShip(bool players, const SolarSystem* s)
+	: Vehicle(1.0f, 10000000.0f, 10000000.0f, true),
+	mPlayers(players),
+	mSystem(s)
 {
 	Color = mPlayers ? Color::White : Color::Red;
 }
@@ -41,11 +62,18 @@ void SpaceShip::update(float time)
 {
 	if(isAlive()) {
 		auto rot = getXYRotation();
-		setAcceleration(Vector3(Thrust * EnginePower * sin(-rot),
-					Thrust * EnginePower * cos(-rot), 0.0f));
+		auto th = Thrust;
+		if(mSystem)
+			th *= SolarSystemSpeedCoefficient;
+		setAcceleration(Vector3(th * EnginePower * cos(rot),
+					th * EnginePower * sin(rot), 0.0f));
 		setXYRotationalVelocity(SidePower * SideThrust);
 	}
-	Entity::update(time);
+	if(!mPlayers) {
+		mAgent.control(this);
+	}
+
+	Vehicle::update(time);
 }
 
 class LaserShot : public Entity {
@@ -62,7 +90,7 @@ LaserShot::LaserShot(const SpaceShip* shooter)
 {
 	setVelocity(shooter->getVelocity());
 	auto rot = shooter->getXYRotation();
-	Vector3 dir(sin(-rot), cos(-rot), 0.0f);
+	Vector3 dir(cos(rot), sin(rot), 0.0f);
 	setXYRotation(rot);
 	setVelocity(shooter->getVelocity() + dir * 1000.0f);
 	setPosition(shooter->getPosition() + getVelocity().normalized() * shooter->Scale);
@@ -115,7 +143,7 @@ SolarObject::SolarObject(const SolarObject* center, SOType type, float size, flo
 	: mSize(size),
 	mOrbit(orbit * 50000.0f),
 	mOrbitPosition(rand() % 100 * 0.01f),
-	mSpeed(speed * 0.01f),
+	mSpeed(speed * 0.002f),
 	mCenter(center),
 	mObjectType(type)
 {
@@ -198,6 +226,25 @@ void SolarSystem::update(float time)
 	}
 }
 
+void SpaceShipAI::control(SpaceShip* ss)
+{
+	if(ss->getSystem()) {
+		if(mTarget) {
+			auto desiredVelocity = mTarget->getPosition() - ss->getPosition();
+			auto velDiff = desiredVelocity - ss->getVelocity() * 2.5f;
+			velDiff = Math::rotate2D(velDiff, -ss->getXYRotation());
+			auto velDiffNorm = velDiff / (ss->EnginePower * SolarSystemSpeedCoefficient);
+			ss->SideThrust = clamp(-1.0f, velDiffNorm.y, 1.0f);
+			ss->Thrust = clamp(-1.0f, velDiffNorm.x, 1.0f);
+		} else {
+			const auto& objs = ss->getSystem()->getObjects();
+			assert(objs.size() > 0);
+			int index = rand() % objs.size();
+			mTarget = objs[index];
+		}
+	}
+}
+
 class GameState {
 	public:
 		GameState();
@@ -213,24 +260,30 @@ class GameState {
 		void shoot(SpaceShip& s);
 
 	private:
+		void spawnSolarShip();
+
 		std::vector<SpaceShip> mCombatShips;
 		std::vector<SpaceShip> mSolarShips;
 		std::vector<LaserShot> mShots;
 		bool mSolar = false;
 		SolarSystem mSystem;
+		SteadyTimer mSpawnSolarShipTimer;
 };
 
 GameState::GameState()
+	: mSpawnSolarShipTimer(0.8f)
 {
 	// player
-	mCombatShips.push_back(SpaceShip(true));
+	mCombatShips.push_back(SpaceShip(true, nullptr));
 	for(int i = 0; i < 3; i++) {
-		mCombatShips.push_back(SpaceShip(false));
+		mCombatShips.push_back(SpaceShip(false, nullptr));
 		mCombatShips[i + 1].setPosition(Vector3(rand() % 100 - 50, rand() % 100 - 50, 0.0f));
 	}
-	SpaceShip ss(true);
+	SpaceShip ss(true, &mSystem);
 	ss.setPosition(Vector3(20000.0f, 20000.0f, 0.0f));
 	mSolarShips.push_back(ss);
+	for(int i = 0; i < 5; i++)
+		spawnSolarShip();
 }
 
 void GameState::update(float t)
@@ -259,6 +312,12 @@ void GameState::update(float t)
 		mSystem.update(t);
 		for(auto& ps : mSolarShips) {
 			ps.update(t);
+		}
+
+		if(mSpawnSolarShipTimer.check(t)) {
+			if(mSolarShips.size() < 20 && (rand() % 3) == 0) {
+				spawnSolarShip();
+			}
 		}
 	}
 }
@@ -311,6 +370,17 @@ const std::vector<SpaceShip>& GameState::getShips() const
 std::vector<SpaceShip>& GameState::getShips()
 {
 	return mSolar ? mSolarShips : mCombatShips;
+}
+
+void GameState::spawnSolarShip()
+{
+	SpaceShip ss(false, &mSystem);
+	const auto& objs = mSystem.getObjects();
+	assert(objs.size() > 0);
+	int index = rand() % objs.size();
+	const auto& obj = objs[index];
+	ss.setPosition(obj->getPosition());
+	mSolarShips.push_back(ss);
 }
 
 
@@ -404,10 +474,28 @@ void AppDriver::drawSpace()
 		float sc = ps.Scale * pow(mZoom, 0.1f);
 		glScalef(sc, sc, 1.0f);
 		glBegin(GL_TRIANGLES);
-		glVertex2f( 0.0f,  1.0f);
-		glVertex2f(-0.7f, -1.0f);
-		glVertex2f( 0.7f, -1.0f);
+		glVertex2f( 1.0f,  0.0f);
+		glVertex2f(-1.0f, -0.7f);
+		glVertex2f(-1.0f,  0.7f);
 		glEnd();
+
+		// thrusters
+		glLineWidth(2.0f);
+		glColor3f(0.5f, 0.5f, 1.0f);
+		if(ps.Thrust) {
+			glBegin(GL_LINES);
+			glVertex2f(0.0f, 0.0f);
+			glVertex2f(-ps.Thrust * 2.0f, 0.0f);
+			glEnd();
+		}
+		if(ps.SideThrust) {
+			glBegin(GL_LINES);
+			glVertex2f(0.0f, 0.0f);
+			glVertex2f(0.0f, -ps.SideThrust * 1.0f);
+			glEnd();
+		}
+		glLineWidth(1.0f);
+
 		glPopMatrix();
 	}
 
@@ -419,8 +507,8 @@ void AppDriver::drawSpace()
 		glTranslatef(tr.x, tr.y, 0.0f);
 		glRotatef(Math::radiansToDegrees(ls.getXYRotation()), 0.0f, 0.0f, 1.0f);
 		glBegin(GL_LINES);
-		glVertex2f( 0.0f,  6.0f);
-		glVertex2f( 0.0f, -6.0f);
+		glVertex2f( 6.0f, 0.0f);
+		glVertex2f(-6.0f, 0.0f);
 		glEnd();
 		glPopMatrix();
 	}
@@ -650,9 +738,6 @@ bool AppDriver::handleSpaceKey(SDLKey key, bool down)
 		default:
 			break;
 	}
-
-	if(mState == AppDriverState::SolarSystem)
-		ps.Thrust = signum(ps.Thrust) * 10.0f;
 
 	return false;
 }
