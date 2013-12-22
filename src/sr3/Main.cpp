@@ -1,6 +1,7 @@
 #include <cassert>
 #include <string>
 #include <vector>
+#include <cfloat>
 
 #include "common/SDL_utils.h"
 #include "common/DriverFramework.h"
@@ -388,7 +389,8 @@ enum class AppDriverState {
 	MainMenu,
 	SpaceCombat,
 	CombatWon,
-	SolarSystem
+	SolarSystem,
+	Landed
 };
 
 enum class CutsceneText {
@@ -409,7 +411,7 @@ class AppDriver : public Driver {
 		virtual bool prerenderUpdate(float frameTime) override;
 
 	private:
-		void drawMainMenu();
+		void drawMenu();
 		void drawSpace();
 		void drawCutscene();
 		bool handleSpaceKey(SDLKey key, bool down);
@@ -425,6 +427,8 @@ class AppDriver : public Driver {
 		float mZoomSpeed = 0.0f;
 		float mZoom = 1.0f;
 		const float MaxZoomLevel = 0.001f;
+		const float mPlanetSizeCoefficient = 500.0f;
+		SolarObject* mLandTarget = nullptr;
 };
 
 AppDriver::AppDriver()
@@ -443,16 +447,33 @@ bool AppDriver::init()
 	return true;
 }
 
-void AppDriver::drawMainMenu()
+void AppDriver::drawMenu()
 {
-	float fx = getScreenWidth() * 0.5f - 200;
-	float fy = getScreenHeight() - 50;
-	SDL_utils::drawRectangle(fx, fy,
-			getScreenWidth() * 0.5f + 200, getScreenHeight() - 250, Color::White, 1.0f, true);
-	SDL_utils::drawText(mTextMap, mFont, Vector3(0.0f, 0.0f, 0.0f), 1.0f,
-			getScreenWidth(), getScreenHeight(),
-			getScreenWidth() * 0.5f, getScreenHeight() - 150, FontConfig("Start game", Color::White, 1.0f),
-			true, true);
+	switch(mState) {
+		case AppDriverState::MainMenu:
+			{
+				float fx = getScreenWidth() * 0.5f - 200;
+				float fy = getScreenHeight() - 50;
+				SDL_utils::drawRectangle(fx, fy,
+						getScreenWidth() * 0.5f + 200, getScreenHeight() - 250, Color::White, 1.0f, true);
+				SDL_utils::drawText(mTextMap, mFont, Vector3(0.0f, 0.0f, 0.0f), 1.0f,
+						getScreenWidth(), getScreenHeight(),
+						getScreenWidth() * 0.5f, getScreenHeight() - 150, FontConfig("Start game", Color::White, 1.0f),
+						true, true);
+			}
+			break;
+
+		case AppDriverState::Landed:
+			SDL_utils::drawText(mTextMap, mFont, Vector3(0.0f, 0.0f, 0.0f), 1.0f,
+					getScreenWidth(), getScreenHeight(),
+					getScreenWidth() * 0.5f, getScreenHeight() * 0.5f, FontConfig("Return to space", Color::White, 1.0f),
+					true, true);
+			break;
+
+		default:
+			assert(0);
+			break;
+	}
 }
 
 void AppDriver::drawSpace()
@@ -544,7 +565,7 @@ void AppDriver::drawSpace()
 			glTranslatef(tr.x, tr.y, 0.0f);
 			float s = so->getSize();
 			float points = clamp(16.0f, s * 8.0f, 128.0f);
-			s = s * mZoom * 500.0f;
+			s = s * mZoom * mPlanetSizeCoefficient;
 			glBegin(GL_TRIANGLE_FAN);
 			glVertex2f(0.0f,  0.0f);
 			for(int i = 0; i < points + 1; i++) {
@@ -552,6 +573,13 @@ void AppDriver::drawSpace()
 			}
 			glEnd();
 			glPopMatrix();
+		}
+
+		if(mLandTarget) {
+			SDL_utils::drawText(mTextMap, mFont, Vector3(0.0f, 0.0f, 0.0f), 1.0f,
+					getScreenWidth(), getScreenHeight(),
+					10, 40, FontConfig("Press Return to land", Color::White, 1.0f),
+					true, false);
 		}
 	}
 }
@@ -584,7 +612,8 @@ void AppDriver::drawFrame()
 {
 	switch(mState) {
 		case AppDriverState::MainMenu:
-			drawMainMenu();
+		case AppDriverState::Landed:
+			drawMenu();
 			break;
 
 		case AppDriverState::SpaceCombat:
@@ -607,6 +636,13 @@ bool AppDriver::handleMousePress(float frameTime, Uint8 button)
 			}
 			break;
 
+		case AppDriverState::Landed:
+			if(button == SDL_BUTTON_LEFT) {
+				// TODO
+				mState = AppDriverState::SolarSystem;
+			}
+			break;
+
 		case AppDriverState::SpaceCombat:
 		case AppDriverState::SolarSystem:
 			break;
@@ -626,6 +662,18 @@ bool AppDriver::handleKeyDown(float frameTime, SDLKey key)
 		case AppDriverState::SpaceCombat:
 		case AppDriverState::SolarSystem:
 			return handleSpaceKey(key, true);
+
+		case AppDriverState::Landed:
+			switch(key) {
+				case SDLK_SPACE:
+				case SDLK_RETURN:
+					mState = AppDriverState::SolarSystem;
+					break;
+
+				default:
+					break;
+			}
+			break;
 
 		case AppDriverState::MainMenu:
 			switch(key) {
@@ -734,6 +782,13 @@ bool AppDriver::handleSpaceKey(SDLKey key, bool down)
 		case SDLK_SPACE:
 			if(down && mState == AppDriverState::SpaceCombat)
 				mGameState.shoot(mGameState.getPlayerShip());
+			break;
+
+		case SDLK_RETURN:
+			if(down && mLandTarget) {
+				mState = AppDriverState::Landed;
+			}
+			break;
 
 		default:
 			break;
@@ -749,13 +804,29 @@ bool AppDriver::prerenderUpdate(float frameTime)
 
 		mGameState.update(frameTime);
 
+		auto& ps = mGameState.getPlayerShip();
 		if(mState == AppDriverState::SpaceCombat) {
 			if(mCheckCombatTimer.check(frameTime)) {
 				checkCombat();
 			}
+		} else {
+			mLandTarget = nullptr;
+			auto mindist = FLT_MAX;
+			for(const auto& so : mGameState.getSolarSystem().getObjects()) {
+				auto dist = Entity::distanceBetween(ps, *so);
+				if(dist < mindist) {
+					mLandTarget = so;
+					mindist = dist;
+				}
+			}
+
+			// TODO: should actually check relative speed
+			if(mindist > std::max(0.5f, mLandTarget->getSize()) * mPlanetSizeCoefficient ||
+					ps.getVelocity().length() > 10000.0f) {
+				mLandTarget = nullptr;
+			}
 		}
 
-		auto& ps = mGameState.getPlayerShip();
 		mCamera.x = ps.getPosition().x;
 		mCamera.y = ps.getPosition().y;
 	}
