@@ -18,95 +18,6 @@ class SpaceShip;
 class SolarObject;
 class SolarSystem;
 
-static const float SolarSystemSpeedCoefficient = 10.0f;
-
-class SpaceShipAI {
-	public:
-		void control(SpaceShip* ss);
-
-	private:
-		const SolarObject* mTarget = nullptr;
-};
-
-class SpaceShip : public Vehicle {
-	public:
-		SpaceShip(bool players, const SolarSystem* s);
-		bool isAlive() const { return mAlive; }
-		void setAlive(bool b) { mAlive = b; }
-		bool isPlayer() const { return mPlayers; }
-		virtual void update(float time) override;
-		const SolarSystem* getSystem() const { return mSystem; }
-
-		float Scale = 10.0f;
-		float EnginePower = 1000.0f;
-		float Thrust = 0.0f;
-		float SidePower = 2.0f;
-		float SideThrust = 0.0f;
-		Color Color;
-
-	private:
-		bool mAlive = true;
-		bool mPlayers;
-		SpaceShipAI mAgent;
-		const SolarSystem* mSystem;
-};
-
-SpaceShip::SpaceShip(bool players, const SolarSystem* s)
-	: Vehicle(1.0f, 10000000.0f, 10000000.0f, true),
-	mPlayers(players),
-	mSystem(s)
-{
-	Color = mPlayers ? Color::White : Color::Red;
-}
-
-void SpaceShip::update(float time)
-{
-	if(isAlive()) {
-		auto rot = getXYRotation();
-		auto th = Thrust;
-		if(mSystem)
-			th *= SolarSystemSpeedCoefficient;
-		setAcceleration(Vector3(th * EnginePower * cos(rot),
-					th * EnginePower * sin(rot), 0.0f));
-		setXYRotationalVelocity(SidePower * SideThrust);
-	}
-	if(!mPlayers) {
-		mAgent.control(this);
-	}
-
-	Vehicle::update(time);
-}
-
-class LaserShot : public Entity {
-	public:
-		LaserShot(const SpaceShip* shooter);
-		bool testHit(const SpaceShip* other);
-
-	private:
-		const SpaceShip* mShooter;
-};
-
-LaserShot::LaserShot(const SpaceShip* shooter)
-	: mShooter(shooter)
-{
-	setVelocity(shooter->getVelocity());
-	auto rot = shooter->getXYRotation();
-	Vector3 dir(cos(rot), sin(rot), 0.0f);
-	setXYRotation(rot);
-	setVelocity(shooter->getVelocity() + dir * 1000.0f);
-	setPosition(shooter->getPosition() + getVelocity().normalized() * shooter->Scale);
-}
-
-bool LaserShot::testHit(const SpaceShip* other)
-{
-	if(mShooter == other)
-		return false;
-
-	if(mPosition.distance(other->getPosition()) < other->Scale * 1.0f)
-		return true;
-	return false;
-}
-
 enum class SOType {
 	Star,
 	GasGiant,
@@ -157,6 +68,109 @@ void SolarObject::update(float time)
 	auto origo = mCenter ? mCenter->getPosition() : Vector3();
 	mPosition.x = origo.x + mOrbit * sin(mOrbitPosition * PI * 2.0f);
 	mPosition.y = origo.y + mOrbit * cos(mOrbitPosition * PI * 2.0f);
+}
+
+static const float SolarSystemSpeedCoefficient = 10.0f;
+static const float PlanetSizeCoefficient = 500.0f;
+
+class SpaceShipAI {
+	public:
+		void control(SpaceShip* ss);
+
+	private:
+		const SolarObject* mTarget = nullptr;
+};
+
+class SpaceShip : public Vehicle {
+	public:
+		SpaceShip(bool players, const SolarSystem* s);
+		bool isAlive() const { return mAlive; }
+		void setAlive(bool b) { mAlive = b; }
+		bool isPlayer() const { return mPlayers; }
+		virtual void update(float time) override;
+		const SolarSystem* getSystem() const { return mSystem; }
+		bool canLand(const SolarObject& obj) const;
+
+		float Scale = 10.0f;
+		float EnginePower = 1000.0f;
+		float Thrust = 0.0f;
+		float SidePower = 2.0f;
+		float SideThrust = 0.0f;
+		Color Color;
+
+	private:
+		bool mAlive = true;
+		bool mPlayers;
+		SpaceShipAI mAgent;
+		const SolarSystem* mSystem;
+};
+
+SpaceShip::SpaceShip(bool players, const SolarSystem* s)
+	: Vehicle(1.0f, 10000000.0f, 10000000.0f, true),
+	mPlayers(players),
+	mSystem(s)
+{
+	Color = mPlayers ? Color::White : Color::Red;
+}
+
+void SpaceShip::update(float time)
+{
+	if(isAlive()) {
+		auto rot = getXYRotation();
+		auto th = Thrust;
+		if(mSystem)
+			th *= SolarSystemSpeedCoefficient;
+		setAcceleration(Vector3(th * EnginePower * cos(rot),
+					th * EnginePower * sin(rot), 0.0f));
+		setXYRotationalVelocity(SidePower * SideThrust);
+	}
+	if(!mPlayers) {
+		mAgent.control(this);
+	}
+
+	Vehicle::update(time);
+}
+
+bool SpaceShip::canLand(const SolarObject& obj) const
+{
+	// TODO: should actually check relative speed
+	auto dist = Entity::distanceBetween(*this, obj);
+	if(dist > std::max(0.5f, obj.getSize()) * PlanetSizeCoefficient + 100.0f ||
+			getVelocity().length() > 10000.0f) {
+		return false;
+	} else {
+		return true;
+	}
+}
+
+class LaserShot : public Entity {
+	public:
+		LaserShot(const SpaceShip* shooter);
+		bool testHit(const SpaceShip* other);
+
+	private:
+		const SpaceShip* mShooter;
+};
+
+LaserShot::LaserShot(const SpaceShip* shooter)
+	: mShooter(shooter)
+{
+	setVelocity(shooter->getVelocity());
+	auto rot = shooter->getXYRotation();
+	Vector3 dir(cos(rot), sin(rot), 0.0f);
+	setXYRotation(rot);
+	setVelocity(shooter->getVelocity() + dir * 1000.0f);
+	setPosition(shooter->getPosition() + getVelocity().normalized() * shooter->Scale);
+}
+
+bool LaserShot::testHit(const SpaceShip* other)
+{
+	if(mShooter == other)
+		return false;
+
+	if(mPosition.distance(other->getPosition()) < other->Scale * 1.0f)
+		return true;
+	return false;
 }
 
 
@@ -237,6 +251,10 @@ void SpaceShipAI::control(SpaceShip* ss)
 			auto velDiffNorm = velDiff / (ss->EnginePower * SolarSystemSpeedCoefficient);
 			ss->SideThrust = clamp(-1.0f, velDiffNorm.y, 1.0f);
 			ss->Thrust = clamp(-1.0f, velDiffNorm.x, 1.0f);
+			if(ss->canLand(*mTarget)) {
+				// TODO: land
+				mTarget = nullptr;
+			}
 		} else {
 			const auto& objs = ss->getSystem()->getObjects();
 			assert(objs.size() > 0);
@@ -427,7 +445,6 @@ class AppDriver : public Driver {
 		float mZoomSpeed = 0.0f;
 		float mZoom = 1.0f;
 		const float MaxZoomLevel = 0.001f;
-		const float mPlanetSizeCoefficient = 500.0f;
 		SolarObject* mLandTarget = nullptr;
 };
 
@@ -565,7 +582,7 @@ void AppDriver::drawSpace()
 			glTranslatef(tr.x, tr.y, 0.0f);
 			float s = so->getSize();
 			float points = clamp(16.0f, s * 8.0f, 128.0f);
-			s = s * mZoom * mPlanetSizeCoefficient;
+			s = s * mZoom * PlanetSizeCoefficient;
 			glBegin(GL_TRIANGLE_FAN);
 			glVertex2f(0.0f,  0.0f);
 			for(int i = 0; i < points + 1; i++) {
@@ -820,9 +837,7 @@ bool AppDriver::prerenderUpdate(float frameTime)
 				}
 			}
 
-			// TODO: should actually check relative speed
-			if(mindist > std::max(0.5f, mLandTarget->getSize()) * mPlanetSizeCoefficient ||
-					ps.getVelocity().length() > 10000.0f) {
+			if(!ps.canLand(*mLandTarget)) {
 				mLandTarget = nullptr;
 			}
 		}
