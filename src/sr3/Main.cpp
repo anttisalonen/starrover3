@@ -1347,9 +1347,9 @@ void AppDriver::printInfo()
 		for(auto& p : products) {
 			auto i = m->getPrice(p);
 			if(i >= 0.0f)
-				printf("%-7.2f %-5d   ", m->getPrice(p), m->items(p));
+				printf("%-7.2f %-5d    ", m->getPrice(p), m->items(p));
 			else
-				printf("                ");
+				printf("                 ");
 		}
 		printf("\n");
 	}
