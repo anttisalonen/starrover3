@@ -13,6 +13,9 @@
 #include "common/Steering.h"
 #include "common/Clock.h"
 
+static const float SolarSystemSpeedCoefficient = 10.0f;
+static const float PlanetSizeCoefficient = 500.0f;
+
 using namespace Common;
 
 class SpaceShip;
@@ -144,6 +147,27 @@ unsigned int Trader::storageLeft() const
 }
 
 
+class ProductDefinitions {
+	public:
+		ProductDefinitions();
+		const std::vector<std::string>& getNames() const;
+
+	private:
+		std::vector<std::string> mNames;
+};
+
+ProductDefinitions::ProductDefinitions()
+{
+	mNames.push_back("Fruit");
+	mNames.push_back("Minerals");
+	mNames.push_back("Luxury goods");
+}
+
+const std::vector<std::string>& ProductDefinitions::getNames() const
+{
+	return mNames;
+}
+
 class Market {
 	public:
 		Market(float money, unsigned int storage);
@@ -159,12 +183,29 @@ Market::Market(float money, unsigned int storage)
 	: mTrader(money, storage)
 {
 	if(money) {
-		mPrices["Gold"] = rand() % 100 + 50;
-		mPrices["Minerals"] = rand() % 100 + 50;
-		mPrices["Luxury goods"] = rand() % 100 + 50;
-		mTrader.addToStorage("Gold", rand() % 30);
-		mTrader.addToStorage("Minerals", rand() % 100);
-		mTrader.addToStorage("Luxury goods", rand() % 50);
+		int type = rand() % 3;
+		std::string want;
+		std::string produce;
+		std::string dontneed;
+		if(type == 0) {
+			want = "Fruit";
+			produce = "Minerals";
+			dontneed = "Luxury goods";
+		} else if(type == 1) {
+			want = "Luxury goods";
+			produce = "Fruit";
+			dontneed = "Minerals";
+		} else {
+			want = "Minerals";
+			produce = "Luxury goods";
+			dontneed = "Fruit";
+		}
+		mPrices[want] = rand() % 30 + 30;
+		mPrices[produce] = rand() % 10 + 30;
+		mPrices[dontneed] = rand() % 10 + 30;
+		mTrader.addToStorage(want, rand() % 30);
+		mTrader.addToStorage(produce, rand() % 100);
+		mTrader.addToStorage(dontneed, rand() % 50);
 	}
 }
 
@@ -190,15 +231,20 @@ enum class SOType {
 
 class SolarObject : public Entity {
 	public:
-		SolarObject(float size);
-		SolarObject(const SolarObject* center, SOType type, float size, float orbit, float speed, unsigned int marketlevel);
+		SolarObject(const std::string& name, float size, float mass);
+		SolarObject(const SolarObject* center, const std::string& name, SOType type,
+				float size, float mass, float orbit, float speed, unsigned int marketlevel);
 		float getSize() const { return mSize; }
+		float getMass() const { return mMass; }
 		virtual void update(float time) override;
 		SOType getType() const { return mObjectType; }
 		const Market* getMarket() const { return &mMarket; }
+		const std::string& getName() const { return mName; }
 
 	private:
+		std::string mName;
 		float mSize;
+		float mMass;
 		float mOrbit = 0.0f;
 		float mOrbitPosition = 0.0f;
 		float mSpeed = 0.0f;
@@ -207,15 +253,20 @@ class SolarObject : public Entity {
 		Market mMarket;
 };
 
-SolarObject::SolarObject(float size)
-	: mSize(size * 20.0f),
+SolarObject::SolarObject(const std::string& name, float size, float mass)
+	: mName(name),
+	mSize(size * 20.0f),
+	mMass(mass * 10.0f),
 	mObjectType(SOType::Star),
 	mMarket(0, 0)
 {
 }
 
-SolarObject::SolarObject(const SolarObject* center, SOType type, float size, float orbit, float speed, unsigned int marketlevel)
-	: mSize(size),
+SolarObject::SolarObject(const SolarObject* center, const std::string& name, SOType type,
+		float size, float mass, float orbit, float speed, unsigned int marketlevel)
+	: mName(name),
+	mSize(size),
+	mMass(mass),
 	mOrbit(orbit * 50000.0f),
 	mOrbitPosition(rand() % 100 * 0.01f),
 	mSpeed(speed * 0.002f),
@@ -235,8 +286,66 @@ void SolarObject::update(float time)
 	mPosition.y = origo.y + mOrbit * cos(mOrbitPosition * PI * 2.0f);
 }
 
-static const float SolarSystemSpeedCoefficient = 10.0f;
-static const float PlanetSizeCoefficient = 500.0f;
+class TradeRoute {
+	public:
+		TradeRoute(const SolarObject* from, const SolarObject* to, const std::string& product);
+		const SolarObject* getFrom() const { return mFrom; }
+		const SolarObject* getTo() const { return mTo; }
+		const std::string& getProduct() const { return mProduct; }
+
+	private:
+		const SolarObject* mFrom;
+		const SolarObject* mTo;
+		std::string mProduct;
+};
+
+TradeRoute::TradeRoute(const SolarObject* from, const SolarObject* to, const std::string& product)
+	: mFrom(from),
+	mTo(to),
+	mProduct(product)
+{
+}
+
+
+class TradeNetwork {
+	public:
+		void addTradeRoute(const SolarObject* from, const SolarObject* to, const std::string& product);
+		const std::vector<TradeRoute>& getTradeRoutesFrom(const SolarObject* from) const;
+
+	private:
+		std::map<const SolarObject*, std::vector<TradeRoute>> mTradeRoutes;
+};
+
+void TradeNetwork::addTradeRoute(const SolarObject* from, const SolarObject* to, const std::string& product)
+{
+	mTradeRoutes[from].push_back(TradeRoute(from, to, product));
+}
+
+const std::vector<TradeRoute>& TradeNetwork::getTradeRoutesFrom(const SolarObject* from) const
+{
+	static std::vector<TradeRoute> empty;
+	auto it = mTradeRoutes.find(from);
+	return it == mTradeRoutes.end() ? empty : it->second;
+}
+
+class SolarSystem {
+	public:
+		SolarSystem();
+		~SolarSystem();
+		SolarSystem(const SolarSystem&) = delete;
+		SolarSystem(const SolarSystem&&) = delete;
+		SolarSystem& operator=(const SolarSystem&) & = delete;
+		SolarSystem& operator=(SolarSystem&&) & = delete;
+
+		const std::vector<SolarObject*>& getObjects() const;
+		void update(float time);
+		const TradeNetwork& getTradeNetwork() const { return mTradeNetwork; }
+
+	private:
+		std::vector<SolarObject*> mObjects;
+		TradeNetwork mTradeNetwork;
+};
+
 
 class SpaceShipAI {
 	public:
@@ -262,6 +371,7 @@ class SpaceShip : public Vehicle {
 		void land(const SolarObject* obj);
 		void takeoff();
 		const SolarObject* getLandObject() const { return mLandObject; }
+		const SolarObject* getClosestObject(float* dist) const;
 
 		float Scale = 10.0f;
 		float EnginePower = 1000.0f;
@@ -298,10 +408,21 @@ void SpaceShip::update(float time)
 	if(isAlive() && !landed()) {
 		auto rot = getXYRotation();
 		auto th = Thrust;
-		if(mSystem)
+		Vector3 accel;
+
+		if(mSystem) {
 			th *= SolarSystemSpeedCoefficient;
-		setAcceleration(Vector3(th * EnginePower * cos(rot),
-					th * EnginePower * sin(rot), 0.0f));
+			for(const auto& obj : mSystem->getObjects()) {
+				auto dist = Entity::distanceBetween(*this, *obj);
+				auto f = Entity::vectorFromTo(*this, *obj) * (1e+6 * obj->getMass() / (dist * dist));
+				accel += f;
+			}
+		}
+
+		accel += Vector3(th * EnginePower * cos(rot),
+				th * EnginePower * sin(rot), 0.0f);
+
+		setAcceleration(accel);
 		setXYRotationalVelocity(SidePower * SideThrust);
 	}
 	if(!mPlayers) {
@@ -349,6 +470,27 @@ void SpaceShip::takeoff()
 	mLandObject = nullptr;
 }
 
+const SolarObject* SpaceShip::getClosestObject(float* dist) const
+{
+	const SolarObject* ret = nullptr;
+	auto mindist = FLT_MAX;
+	if(!mSystem)
+		return ret;
+
+	for(const auto& so : mSystem->getObjects()) {
+		auto thisdist = Entity::distanceBetween(*this, *so);
+		if(thisdist < mindist) {
+			ret = so;
+			mindist = thisdist;
+		}
+	}
+
+	if(dist)
+		*dist = mindist;
+
+	return ret;
+}
+
 class LaserShot : public Entity {
 	public:
 		LaserShot(const SpaceShip* shooter);
@@ -380,53 +522,58 @@ bool LaserShot::testHit(const SpaceShip* other)
 }
 
 
-class SolarSystem {
-	public:
-		SolarSystem();
-		~SolarSystem();
-		SolarSystem(const SolarSystem&) = delete;
-		SolarSystem(const SolarSystem&&) = delete;
-		SolarSystem& operator=(const SolarSystem&) & = delete;
-		SolarSystem& operator=(SolarSystem&&) & = delete;
-
-		const std::vector<SolarObject*>& getObjects() const;
-		void update(float time);
-
-	private:
-		std::vector<SolarObject*> mObjects;
-};
-
 SolarSystem::SolarSystem()
 {
-	auto star = new SolarObject(1.0f);
+	srand(21);
+	auto star = new SolarObject("Sol", 1.0f, 1.0f);
 	mObjects.push_back(star);
-	mObjects.push_back(new SolarObject(star, SOType::RockyNoAtmosphere, 0.5f, 0.4f, 3.0f, 0));
-	mObjects.push_back(new SolarObject(star, SOType::RockyCarbonDioxide, 0.9f, 0.7f, 2.0f, 1));
-	auto p1 = new SolarObject(star, SOType::RockyOxygen, 1.0f, 1.0f, 1.0f, 9);
-	auto m1 = new SolarObject(p1, SOType::RockyNoAtmosphere, 0.4f, 0.1f, 3.0f, 3);
+	mObjects.push_back(new SolarObject(star, "Mercury", SOType::RockyNoAtmosphere, 0.5f, 0.5f, 0.4f, 3.0f, 0));
+	mObjects.push_back(new SolarObject(star, "Venus", SOType::RockyCarbonDioxide, 0.9f, 0.9f, 0.7f, 2.0f, 1));
+	auto p1 = new SolarObject(star, "Earth", SOType::RockyOxygen, 1.0f, 1.0f, 1.0f, 1.0f, 9);
+	auto m1 = new SolarObject(p1, "Moon", SOType::RockyNoAtmosphere, 0.4f, 0.2f, 0.1f, 3.0f, 3);
 	mObjects.push_back(p1);
 	mObjects.push_back(m1);
-	mObjects.push_back(new SolarObject(star, SOType::RockyCarbonDioxide, 0.7f, 2.0f, 0.5f, 6));
-	auto p2 = new SolarObject(star, SOType::GasGiant, 15.0f, 4.0f, 0.25f, 0);
-	auto m2 = new SolarObject(p2, SOType::RockyNoAtmosphere, 0.2f, 0.3f, 3.0f, 1);
-	auto m3 = new SolarObject(p2, SOType::RockyNoAtmosphere, 0.2f, 0.4f, 3.0f, 1);
-	auto m4 = new SolarObject(p2, SOType::RockyNoAtmosphere, 0.2f, 0.5f, 3.0f, 0);
-	auto m5 = new SolarObject(p2, SOType::RockyNoAtmosphere, 0.2f, 0.6f, 3.0f, 0);
+	mObjects.push_back(new SolarObject(star, "Mars", SOType::RockyCarbonDioxide, 0.7f, 0.7f, 2.0f, 0.5f, 6));
+	auto p2 = new SolarObject(star, "Jupiter", SOType::GasGiant, 15.0f, 15.0f, 4.0f, 0.25f, 0);
+	auto m2 = new SolarObject(p2, "Io", SOType::RockyNoAtmosphere, 0.2f, 0.2f, 0.3f, 3.0f, 1);
+	auto m3 = new SolarObject(p2, "Europa", SOType::RockyNoAtmosphere, 0.2f, 0.2f, 0.4f, 3.0f, 1);
+	auto m4 = new SolarObject(p2, "Ganymede", SOType::RockyNoAtmosphere, 0.2f, 0.2f, 0.5f, 3.0f, 0);
+	auto m5 = new SolarObject(p2, "Callisto", SOType::RockyNoAtmosphere, 0.2f, 0.2f, 0.6f, 3.0f, 0);
 	mObjects.push_back(p2);
 	mObjects.push_back(m2);
 	mObjects.push_back(m3);
 	mObjects.push_back(m4);
 	mObjects.push_back(m5);
-	auto p3 = new SolarObject(star, SOType::GasGiant, 10.0f, 8.0f, 0.25f, 0);
-	auto m6 = new SolarObject(p3, SOType::RockyNoAtmosphere, 0.2f, 0.3f, 2.0f, 0);
-	auto m7 = new SolarObject(p3, SOType::RockyNoAtmosphere, 0.2f, 0.4f, 2.0f, 0);
-	auto m8 = new SolarObject(p3, SOType::RockyNoAtmosphere, 0.2f, 0.5f, 2.0f, 1);
-	auto m9 = new SolarObject(p3, SOType::RockyNoAtmosphere, 0.2f, 0.6f, 2.0f, 0);
+	auto p3 = new SolarObject(star, "Saturn", SOType::GasGiant, 10.0f, 10.0f, 8.0f, 0.25f, 0);
+	auto m6 = new SolarObject(p3, "Dione", SOType::RockyNoAtmosphere, 0.2f, 0.2f, 0.3f, 2.0f, 0);
+	auto m7 = new SolarObject(p3, "Rhea", SOType::RockyNoAtmosphere, 0.2f, 0.2f, 0.4f, 2.0f, 0);
+	auto m8 = new SolarObject(p3, "Titan", SOType::RockyNoAtmosphere, 0.2f, 0.2f, 0.5f, 2.0f, 1);
+	auto m9 = new SolarObject(p3, "Iapetus", SOType::RockyNoAtmosphere, 0.2f, 0.2f, 0.6f, 2.0f, 0);
 	mObjects.push_back(p3);
 	mObjects.push_back(m6);
 	mObjects.push_back(m7);
 	mObjects.push_back(m8);
 	mObjects.push_back(m9);
+
+	ProductDefinitions pd;
+	const auto& products = pd.getNames();
+	for(SolarObject* o : mObjects) {
+		const auto& m1 = o->getMarket();
+		const auto& stor = m1->getStorage();
+		for(SolarObject* o2 : mObjects) {
+			if(o == o2)
+				continue;
+
+			const auto& m2 = o2->getMarket();
+			for(const auto& prod : products) {
+				auto it = stor.find(prod);
+				if(it != stor.end() && it->second > 10 && m2->getPrice(prod) > 1.5f * m1->getPrice(prod)) {
+					mTradeNetwork.addTradeRoute(o, o2, prod);
+					std::cout << "Trade route from " << o->getName() << " to " << o2->getName() << " for " << prod << ".\n";
+				}
+			}
+		}
+	}
 }
 
 SolarSystem::~SolarSystem()
@@ -462,15 +609,17 @@ void SpaceShipAI::control(SpaceShip* ss, float time)
 				auto velDiffNorm = velDiff / (ss->EnginePower * SolarSystemSpeedCoefficient);
 				ss->SideThrust = clamp(-1.0f, velDiffNorm.y, 1.0f);
 				ss->Thrust = clamp(-1.0f, velDiffNorm.x, 1.0f);
+
 				if(ss->canLand(*mTarget)) {
 					ss->land(mTarget);
-					handleLanding(ss);
-					mTarget = nullptr;
+					handleLanding(ss); // resets mTarget
 				}
 			} else {
 				const auto& objs = ss->getSystem()->getObjects();
 				assert(objs.size() > 0);
 				int index = rand() % objs.size();
+				if(index == 0 && objs.size() > 1)
+					index++;
 				mTarget = objs[index];
 			}
 		}
@@ -480,6 +629,19 @@ void SpaceShipAI::control(SpaceShip* ss, float time)
 void SpaceShipAI::handleLanding(SpaceShip* ss)
 {
 	assert(mTarget);
+	const auto& tn = ss->getSystem()->getTradeNetwork();
+	const auto& routes = tn.getTradeRoutesFrom(mTarget);
+	if(routes.size() > 0) {
+		int index = rand() % routes.size();
+		mTarget = routes[index].getTo();
+	} else {
+		const auto& objs = ss->getSystem()->getObjects();
+		assert(objs.size() > 0);
+		int index = rand() % objs.size();
+		if(index == 0 && objs.size() > 1)
+			index++;
+		mTarget = objs[index];
+	}
 }
 
 class GameState {
@@ -665,7 +827,7 @@ class AppDriver : public Driver {
 		float mZoomSpeed = 0.0f;
 		float mZoom = 1.0f;
 		const float MaxZoomLevel = 0.001f;
-		SolarObject* mLandTarget = nullptr;
+		const SolarObject* mLandTarget = nullptr;
 };
 
 AppDriver::AppDriver()
@@ -1081,17 +1243,9 @@ bool AppDriver::prerenderUpdate(float frameTime)
 				checkCombat();
 			}
 		} else {
-			mLandTarget = nullptr;
-			auto mindist = FLT_MAX;
-			for(const auto& so : mGameState.getSolarSystem().getObjects()) {
-				auto dist = Entity::distanceBetween(ps, *so);
-				if(dist < mindist) {
-					mLandTarget = so;
-					mindist = dist;
-				}
-			}
+			mLandTarget = ps.getClosestObject(nullptr);
 
-			if(!ps.canLand(*mLandTarget)) {
+			if(mLandTarget && !ps.canLand(*mLandTarget)) {
 				mLandTarget = nullptr;
 			}
 		}
