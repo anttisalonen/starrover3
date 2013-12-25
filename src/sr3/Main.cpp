@@ -90,6 +90,7 @@ class Trader {
 		unsigned int addToStorage(const std::string& product, unsigned int number);
 		unsigned int storageLeft() const;
 		const std::map<std::string, unsigned int>& getStorage() const { return mStorage.getStorage(); }
+		unsigned int items(const std::string& product) const;
 
 	private:
 		float mMoney;
@@ -106,9 +107,9 @@ unsigned int Trader::buy(const std::string& product, unsigned int number, float 
 {
 	assert(price >= 0.0f);
 
-	unsigned int tobuy = std::max<unsigned int>(buyer.getMoney() / price, number);
-	tobuy = std::max<unsigned int>(tobuy, mStorage.items(product));
-	tobuy = std::max<unsigned int>(tobuy, buyer.storageLeft());
+	unsigned int tobuy = std::min<unsigned int>(buyer.getMoney() / price, number);
+	tobuy = std::min<unsigned int>(tobuy, mStorage.items(product));
+	tobuy = std::min<unsigned int>(tobuy, buyer.storageLeft());
 	if(tobuy) {
 		float total_cost = tobuy * price;
 		buyer.removeMoney(total_cost);
@@ -146,6 +147,11 @@ unsigned int Trader::storageLeft() const
 	return mStorage.capacityLeft();
 }
 
+unsigned int Trader::items(const std::string& product) const
+{
+	return mStorage.items(product);
+}
+
 
 class ProductDefinitions {
 	public:
@@ -173,6 +179,10 @@ class Market {
 		Market(float money, unsigned int storage);
 		float getPrice(const std::string& product) const;
 		const std::map<std::string, unsigned int>& getStorage() const { return mTrader.getStorage(); }
+		unsigned int buy(const std::string& product, unsigned int number, Trader& buyer);
+		unsigned int sell(const std::string& product, unsigned int number, Trader& seller);
+		Trader& getTrader() { return mTrader; }
+		const Trader& getTrader() const { return mTrader; }
 
 	private:
 		std::map<std::string, float> mPrices;
@@ -218,6 +228,16 @@ float Market::getPrice(const std::string& product) const
 		return it->second;
 }
 
+unsigned int Market::buy(const std::string& product, unsigned int number, Trader& buyer)
+{
+	return mTrader.buy(product, number, getPrice(product), buyer);
+}
+
+unsigned int Market::sell(const std::string& product, unsigned int number, Trader& seller)
+{
+	return mTrader.sell(product, number, getPrice(product), seller);
+}
+
 
 enum class SOType {
 	Star,
@@ -238,7 +258,10 @@ class SolarObject : public Entity {
 		float getMass() const { return mMass; }
 		virtual void update(float time) override;
 		SOType getType() const { return mObjectType; }
+		Market* getMarket() { return &mMarket; }
 		const Market* getMarket() const { return &mMarket; }
+		Trader& getTrader() { return mMarket.getTrader(); }
+		const Trader& getTrader() const { return mMarket.getTrader(); }
 		const std::string& getName() const { return mName; }
 
 	private:
@@ -256,7 +279,7 @@ class SolarObject : public Entity {
 SolarObject::SolarObject(const std::string& name, float size, float mass)
 	: mName(name),
 	mSize(size * 20.0f),
-	mMass(mass * 10.0f),
+	mMass(mass * 20.0f),
 	mObjectType(SOType::Star),
 	mMarket(0, 0)
 {
@@ -288,18 +311,20 @@ void SolarObject::update(float time)
 
 class TradeRoute {
 	public:
-		TradeRoute(const SolarObject* from, const SolarObject* to, const std::string& product);
+		TradeRoute(SolarObject* from, SolarObject* to, const std::string& product);
+		SolarObject* getFrom() { return mFrom; }
+		SolarObject* getTo() { return mTo; }
 		const SolarObject* getFrom() const { return mFrom; }
 		const SolarObject* getTo() const { return mTo; }
 		const std::string& getProduct() const { return mProduct; }
 
 	private:
-		const SolarObject* mFrom;
-		const SolarObject* mTo;
+		SolarObject* mFrom;
+		SolarObject* mTo;
 		std::string mProduct;
 };
 
-TradeRoute::TradeRoute(const SolarObject* from, const SolarObject* to, const std::string& product)
+TradeRoute::TradeRoute(SolarObject* from, SolarObject* to, const std::string& product)
 	: mFrom(from),
 	mTo(to),
 	mProduct(product)
@@ -309,21 +334,29 @@ TradeRoute::TradeRoute(const SolarObject* from, const SolarObject* to, const std
 
 class TradeNetwork {
 	public:
-		void addTradeRoute(const SolarObject* from, const SolarObject* to, const std::string& product);
-		const std::vector<TradeRoute>& getTradeRoutesFrom(const SolarObject* from) const;
+		void addTradeRoute(SolarObject* from, SolarObject* to, const std::string& product);
+		std::vector<TradeRoute*>& getTradeRoutesFrom(const SolarObject* from);
+		const std::vector<TradeRoute*>& getTradeRoutesFrom(const SolarObject* from) const;
 
 	private:
-		std::map<const SolarObject*, std::vector<TradeRoute>> mTradeRoutes;
+		std::map<const SolarObject*, std::vector<TradeRoute*>> mTradeRoutes;
 };
 
-void TradeNetwork::addTradeRoute(const SolarObject* from, const SolarObject* to, const std::string& product)
+void TradeNetwork::addTradeRoute(SolarObject* from, SolarObject* to, const std::string& product)
 {
-	mTradeRoutes[from].push_back(TradeRoute(from, to, product));
+	mTradeRoutes[from].push_back(new TradeRoute(from, to, product));
 }
 
-const std::vector<TradeRoute>& TradeNetwork::getTradeRoutesFrom(const SolarObject* from) const
+std::vector<TradeRoute*>& TradeNetwork::getTradeRoutesFrom(const SolarObject* from)
 {
-	static std::vector<TradeRoute> empty;
+	static std::vector<TradeRoute*> empty;
+	auto it = mTradeRoutes.find(from);
+	return it == mTradeRoutes.end() ? empty : it->second;
+}
+
+const std::vector<TradeRoute*>& TradeNetwork::getTradeRoutesFrom(const SolarObject* from) const
+{
+	static std::vector<TradeRoute*> empty;
 	auto it = mTradeRoutes.find(from);
 	return it == mTradeRoutes.end() ? empty : it->second;
 }
@@ -339,6 +372,7 @@ class SolarSystem {
 
 		const std::vector<SolarObject*>& getObjects() const;
 		void update(float time);
+		TradeNetwork& getTradeNetwork() { return mTradeNetwork; }
 		const TradeNetwork& getTradeNetwork() const { return mTradeNetwork; }
 
 	private:
@@ -354,17 +388,20 @@ class SpaceShipAI {
 
 	private:
 		void handleLanding(SpaceShip* ss);
-		const SolarObject* mTarget = nullptr;
+		SolarObject* mTarget = nullptr;
 		Countdown mLandedTimer;
+		TradeRoute* mTradeRoute = nullptr;
+		SpaceShip* mSS = nullptr;
 };
 
 class SpaceShip : public Vehicle {
 	public:
-		SpaceShip(bool players, const SolarSystem* s);
+		SpaceShip(bool players, SolarSystem* s);
 		bool isAlive() const { return mAlive; }
 		void setAlive(bool b) { mAlive = b; }
 		bool isPlayer() const { return mPlayers; }
 		virtual void update(float time) override;
+		SolarSystem* getSystem() { return mSystem; }
 		const SolarSystem* getSystem() const { return mSystem; }
 		bool canLand(const SolarObject& obj) const;
 		bool landed() const;
@@ -372,6 +409,9 @@ class SpaceShip : public Vehicle {
 		void takeoff();
 		const SolarObject* getLandObject() const { return mLandObject; }
 		const SolarObject* getClosestObject(float* dist) const;
+		unsigned int getID() const { return mID; }
+		const Trader& getTrader() const { return mTrader; }
+		Trader& getTrader() { return mTrader; }
 
 		float Scale = 10.0f;
 		float EnginePower = 1000.0f;
@@ -384,16 +424,21 @@ class SpaceShip : public Vehicle {
 		bool mAlive = true;
 		bool mPlayers;
 		SpaceShipAI mAgent;
-		const SolarSystem* mSystem;
+		SolarSystem* mSystem;
 		Trader mTrader;
 		const SolarObject* mLandObject = nullptr;
+		unsigned int mID;
+		static unsigned int NextID;
 };
 
-SpaceShip::SpaceShip(bool players, const SolarSystem* s)
+unsigned int SpaceShip::NextID = 0;
+
+SpaceShip::SpaceShip(bool players, SolarSystem* s)
 	: Vehicle(1.0f, 10000000.0f, 10000000.0f, true),
 	mPlayers(players),
 	mSystem(s),
-	mTrader(100.0f, 20)
+	mTrader(100.0f, 20),
+	mID(++NextID)
 {
 	Color = mPlayers ? Color::White : Color::Red;
 }
@@ -414,8 +459,11 @@ void SpaceShip::update(float time)
 			th *= SolarSystemSpeedCoefficient;
 			for(const auto& obj : mSystem->getObjects()) {
 				auto dist = Entity::distanceBetween(*this, *obj);
-				auto f = Entity::vectorFromTo(*this, *obj) * (1e+6 * obj->getMass() / (dist * dist));
-				accel += f;
+				if(dist) {
+					auto f = Entity::vectorFromTo(*this, *obj) * (1e+6 * obj->getMass() / (dist * dist));
+					assert(!isnan(f.x));
+					accel += f;
+				}
 			}
 		}
 
@@ -443,7 +491,7 @@ bool SpaceShip::canLand(const SolarObject& obj) const
 
 	// TODO: should actually check relative speed
 	auto dist = Entity::distanceBetween(*this, obj);
-	if(dist > std::max(0.5f, obj.getSize()) * PlanetSizeCoefficient + 100.0f ||
+	if(dist > std::max(0.5f, obj.getSize()) * PlanetSizeCoefficient + 500.0f ||
 			getVelocity().length() > 10000.0f) {
 		return false;
 	} else {
@@ -567,7 +615,7 @@ SolarSystem::SolarSystem()
 			const auto& m2 = o2->getMarket();
 			for(const auto& prod : products) {
 				auto it = stor.find(prod);
-				if(it != stor.end() && it->second > 10 && m2->getPrice(prod) > 1.5f * m1->getPrice(prod)) {
+				if(it != stor.end() && it->second > 10 && m2->getPrice(prod) > 1.2f * m1->getPrice(prod)) {
 					mTradeNetwork.addTradeRoute(o, o2, prod);
 					std::cout << "Trade route from " << o->getName() << " to " << o2->getName() << " for " << prod << ".\n";
 				}
@@ -596,6 +644,11 @@ void SolarSystem::update(float time)
 
 void SpaceShipAI::control(SpaceShip* ss, float time)
 {
+	if(!mSS)
+		mSS = ss;
+	else
+		assert(mSS == ss);
+
 	if(ss->getSystem()) {
 		if(ss->landed()) {
 			if(mLandedTimer.countdownAndRewind(time)) {
@@ -629,40 +682,76 @@ void SpaceShipAI::control(SpaceShip* ss, float time)
 void SpaceShipAI::handleLanding(SpaceShip* ss)
 {
 	assert(mTarget);
-	const auto& tn = ss->getSystem()->getTradeNetwork();
-	const auto& routes = tn.getTradeRoutesFrom(mTarget);
-	if(routes.size() > 0) {
-		int index = rand() % routes.size();
-		mTarget = routes[index].getTo();
+	assert(mTarget == ss->getLandObject());
+	auto& trader = ss->getTrader();
+	auto landobj = mTarget;
+	mTarget = nullptr;
+
+	if(mTradeRoute) {
+		auto prod = mTradeRoute->getProduct();
+		unsigned int num = 0;
+		const char* verb = " ? ";
+		if(landobj == mTradeRoute->getFrom()) {
+			// buy
+			num = landobj->getMarket()->buy(prod, trader.storageLeft(), trader);
+			verb = " bought ";
+			mTarget = mTradeRoute->getTo();
+		} else if(landobj == mTradeRoute->getTo()) {
+			// sell
+			num = landobj->getMarket()->sell(prod, trader.items(prod), trader);
+			verb = " sold ";
+			mTradeRoute = nullptr;
+		}
+		std::cout << "AI Ship " << ss->getID() << " at " << landobj->getName() << ": " << verb << num <<
+			" units of " << prod << " for " <<
+			(num * landobj->getMarket()->getPrice(prod)) << " credits.\n";
 	} else {
-		const auto& objs = ss->getSystem()->getObjects();
-		assert(objs.size() > 0);
-		int index = rand() % objs.size();
-		if(index == 0 && objs.size() > 1)
-			index++;
-		mTarget = objs[index];
+		std::cout << "AI Ship " << ss->getID() << " at " << landobj->getName() << ".\n";
+	}
+
+	if(!mTarget) {
+		auto& tn = ss->getSystem()->getTradeNetwork();
+		auto& routes = tn.getTradeRoutesFrom(landobj);
+		if(routes.size() > 0) {
+			int index = rand() % routes.size();
+			mTradeRoute = routes[index];
+			mTarget = mTradeRoute->getFrom();
+		} else {
+			const auto& objs = ss->getSystem()->getObjects();
+			assert(objs.size() > 0);
+			int index = rand() % objs.size();
+			if(index == 0 && objs.size() > 1)
+				index++;
+			mTarget = objs[index];
+			mTradeRoute = nullptr;
+		}
 	}
 }
 
 class GameState {
 	public:
 		GameState();
-		SpaceShip& getPlayerShip();
-		const SpaceShip& getPlayerShip() const;
-		const std::vector<SpaceShip>& getShips() const;
-		std::vector<SpaceShip>& getShips();
+		~GameState();
+		GameState(const GameState&) = delete;
+		GameState(const GameState&&) = delete;
+		GameState& operator=(const GameState&) & = delete;
+		GameState& operator=(GameState&&) & = delete;
+		SpaceShip* getPlayerShip();
+		const SpaceShip* getPlayerShip() const;
+		const std::vector<SpaceShip*>& getShips() const;
+		std::vector<SpaceShip*>& getShips();
 		std::vector<LaserShot>& getShots();
 		const SolarSystem& getSolarSystem() const { return mSystem; }
 		bool isSolar() { return mSolar; }
 		void update(float t);
 		void endCombat();
-		void shoot(SpaceShip& s);
+		void shoot(SpaceShip* s);
 
 	private:
 		void spawnSolarShip();
 
-		std::vector<SpaceShip> mCombatShips;
-		std::vector<SpaceShip> mSolarShips;
+		std::vector<SpaceShip*> mCombatShips;
+		std::vector<SpaceShip*> mSolarShips;
 		std::vector<LaserShot> mShots;
 		bool mSolar = false;
 		SolarSystem mSystem;
@@ -673,16 +762,24 @@ GameState::GameState()
 	: mSpawnSolarShipTimer(0.8f)
 {
 	// player
-	mCombatShips.push_back(SpaceShip(true, nullptr));
+	mCombatShips.push_back(new SpaceShip(true, nullptr));
 	for(int i = 0; i < 3; i++) {
-		mCombatShips.push_back(SpaceShip(false, nullptr));
-		mCombatShips[i + 1].setPosition(Vector3(rand() % 100 - 50, rand() % 100 - 50, 0.0f));
+		mCombatShips.push_back(new SpaceShip(false, nullptr));
+		mCombatShips[i + 1]->setPosition(Vector3(rand() % 100 - 50, rand() % 100 - 50, 0.0f));
 	}
-	SpaceShip ss(true, &mSystem);
-	ss.setPosition(Vector3(20000.0f, 20000.0f, 0.0f));
+	auto ss = new SpaceShip(true, &mSystem);
+	ss->setPosition(Vector3(20000.0f, 20000.0f, 0.0f));
 	mSolarShips.push_back(ss);
 	for(int i = 0; i < 5; i++)
 		spawnSolarShip();
+}
+
+GameState::~GameState()
+{
+	for(auto s : mCombatShips)
+		delete s;
+	for(auto s : mSolarShips)
+		delete s;
 }
 
 void GameState::update(float t)
@@ -690,10 +787,10 @@ void GameState::update(float t)
 	if(!mSolar) {
 		for(auto& ps : mCombatShips) {
 			for(auto it = mShots.begin(); it != mShots.end(); ) {
-				if(it->testHit(&ps)) {
-					if(ps.isAlive()) {
+				if(it->testHit(ps)) {
+					if(ps->isAlive()) {
 						it = mShots.erase(it);
-						ps.setAlive(false);
+						ps->setAlive(false);
 					} else {
 						++it;
 					}
@@ -701,7 +798,7 @@ void GameState::update(float t)
 					++it;
 				}
 			}
-			ps.update(t);
+			ps->update(t);
 		}
 
 		for(auto& ls : mShots) {
@@ -710,7 +807,7 @@ void GameState::update(float t)
 	} else {
 		mSystem.update(t);
 		for(auto& ps : mSolarShips) {
-			ps.update(t);
+			ps->update(t);
 		}
 
 		if(mSpawnSolarShipTimer.check(t)) {
@@ -724,6 +821,8 @@ void GameState::update(float t)
 void GameState::endCombat()
 {
 	assert(!mSolar);
+	for(auto s : mCombatShips)
+		delete s;
 	mCombatShips.clear();
 	mShots.clear();
 	mSolar = true;
@@ -734,23 +833,12 @@ std::vector<LaserShot>& GameState::getShots()
 	return mShots;
 }
 
-void GameState::shoot(SpaceShip& s)
+void GameState::shoot(SpaceShip* s)
 {
-	mShots.push_back(LaserShot(&s));
+	mShots.push_back(LaserShot(s));
 }
 
-const SpaceShip& GameState::getPlayerShip() const
-{
-	if(!mSolar) {
-		assert(mCombatShips.size() > 0);
-		return mCombatShips[0];
-	} else {
-		assert(mSolarShips.size() > 0);
-		return mSolarShips[0];
-	}
-}
-
-SpaceShip& GameState::getPlayerShip()
+const SpaceShip* GameState::getPlayerShip() const
 {
 	if(!mSolar) {
 		assert(mCombatShips.size() > 0);
@@ -761,24 +849,35 @@ SpaceShip& GameState::getPlayerShip()
 	}
 }
 
-const std::vector<SpaceShip>& GameState::getShips() const
+SpaceShip* GameState::getPlayerShip()
+{
+	if(!mSolar) {
+		assert(mCombatShips.size() > 0);
+		return mCombatShips[0];
+	} else {
+		assert(mSolarShips.size() > 0);
+		return mSolarShips[0];
+	}
+}
+
+const std::vector<SpaceShip*>& GameState::getShips() const
 {
 	return mSolar ? mSolarShips : mCombatShips;
 }
 
-std::vector<SpaceShip>& GameState::getShips()
+std::vector<SpaceShip*>& GameState::getShips()
 {
 	return mSolar ? mSolarShips : mCombatShips;
 }
 
 void GameState::spawnSolarShip()
 {
-	SpaceShip ss(false, &mSystem);
+	auto ss = new SpaceShip(false, &mSystem);
 	const auto& objs = mSystem.getObjects();
 	assert(objs.size() > 0);
 	int index = rand() % objs.size();
 	const auto& obj = objs[index];
-	ss.setPosition(obj->getPosition());
+	ss->setPosition(obj->getPosition());
 	mSolarShips.push_back(ss);
 }
 
@@ -815,6 +914,7 @@ class AppDriver : public Driver {
 		void drawCutscene();
 		bool handleSpaceKey(SDLKey key, bool down);
 		bool checkCombat();
+		void printInfo();
 
 		TTF_Font* mFont;
 		TTF_Font* mMonoFont;
@@ -835,6 +935,7 @@ AppDriver::AppDriver()
 	mCamera(-300.0f, -300.0f),
 	mCheckCombatTimer(0.5f)
 {
+	setFixedTime(60, false);
 	mFont = TTF_OpenFont("share/DejaVuSans.ttf", 36);
 	assert(mFont);
 	mMonoFont = TTF_OpenFont("share/DejaVuSansMono.ttf", 36);
@@ -851,28 +952,33 @@ bool AppDriver::init()
 void AppDriver::drawMarket()
 {
 	std::vector<std::string> text;
-	const auto& ps = mGameState.getPlayerShip();
-	assert(ps.landed());
-	const auto* obj = ps.getLandObject();
+	const auto* ps = mGameState.getPlayerShip();
+	assert(ps->landed());
+	const auto* obj = ps->getLandObject();
 	assert(obj);
 	const auto* m = obj->getMarket();
 	assert(m);
+	const auto& tr = obj->getTrader();
 	const auto& stor = m->getStorage();
 	char buf[256];
+	snprintf(buf, 255, "%s: market has %.2f credits", obj->getName().c_str(), tr.getMoney());
+	text.push_back(std::string(buf));
 	snprintf(buf, 255, "%-20s %-10s %-10s", "Product", "Quantity", "Price");
 	text.push_back(std::string(buf));
 	for(const auto& st : stor) {
 		snprintf(buf, 255, "%-20s %-10d %-10.2f", st.first.c_str(), st.second, m->getPrice(st.first));
 		text.push_back(std::string(buf));
 	}
+	snprintf(buf, 255, "Ship storage %d      %.2f credits", ps->getTrader().storageLeft(), ps->getTrader().getMoney());
+	text.push_back(std::string(buf));
 
 	float i = getScreenHeight() * 0.9f;
 	for(auto& t : text) {
-		SDL_utils::drawText(mTextMap, mMonoFont, Vector3(0.0f, 0.0f, 0.0f), 1.0f,
+		SDL_utils::drawText(mTextMap, mMonoFont, Vector3(0.0f, 0.0f, 0.0f), 0.5f,
 				getScreenWidth(), getScreenHeight(),
 				getScreenWidth() * 0.5f, i, FontConfig(t.c_str(), Color::White, 1.0f),
 				true, true);
-		i -= 100.0f;
+		i -= 40.0f;
 	}
 }
 
@@ -910,17 +1016,17 @@ void AppDriver::drawSpace()
 	Vector3 trdiff(width * 0.5f - mCamera.x * mZoom, height * 0.5f - mCamera.y * mZoom, 0.0f);
 
 	for(const auto& ps : mGameState.getShips()) {
-		if(ps.landed())
+		if(ps->landed())
 			continue;
 		glPushMatrix();
-		if(ps.isAlive())
-			glColor4ub(ps.Color.r, ps.Color.g, ps.Color.b, 255);
+		if(ps->isAlive())
+			glColor4ub(ps->Color.r, ps->Color.g, ps->Color.b, 255);
 		else
 			glColor4ub(50, 0, 0, 255);
-		auto tr = ps.getPosition() * mZoom + trdiff;
+		auto tr = ps->getPosition() * mZoom + trdiff;
 		glTranslatef(tr.x, tr.y, 0.0f);
-		glRotatef(Math::radiansToDegrees(ps.getXYRotation()), 0.0f, 0.0f, 1.0f);
-		float sc = ps.Scale * pow(mZoom, 0.1f);
+		glRotatef(Math::radiansToDegrees(ps->getXYRotation()), 0.0f, 0.0f, 1.0f);
+		float sc = ps->Scale * pow(mZoom, 0.1f);
 		glScalef(sc, sc, 1.0f);
 		glBegin(GL_TRIANGLES);
 		glVertex2f( 1.0f,  0.0f);
@@ -931,16 +1037,16 @@ void AppDriver::drawSpace()
 		// thrusters
 		glLineWidth(2.0f);
 		glColor3f(0.5f, 0.5f, 1.0f);
-		if(ps.Thrust) {
+		if(ps->Thrust) {
 			glBegin(GL_LINES);
 			glVertex2f(0.0f, 0.0f);
-			glVertex2f(-ps.Thrust * 2.0f, 0.0f);
+			glVertex2f(-ps->Thrust * 2.0f, 0.0f);
 			glEnd();
 		}
-		if(ps.SideThrust) {
+		if(ps->SideThrust) {
 			glBegin(GL_LINES);
 			glVertex2f(0.0f, 0.0f);
-			glVertex2f(0.0f, -ps.SideThrust * 1.0f);
+			glVertex2f(0.0f, -ps->SideThrust * 1.0f);
 			glEnd();
 		}
 		glLineWidth(1.0f);
@@ -1057,7 +1163,7 @@ void AppDriver::drawFrame()
 
 bool AppDriver::handleMousePress(float frameTime, Uint8 button)
 {
-	auto& ps = mGameState.getPlayerShip();
+	auto ps = mGameState.getPlayerShip();
 	switch(mState) {
 		case AppDriverState::MainMenu:
 			if(button == SDL_BUTTON_LEFT) {
@@ -1069,7 +1175,7 @@ bool AppDriver::handleMousePress(float frameTime, Uint8 button)
 			if(button == SDL_BUTTON_LEFT) {
 				// TODO
 				mState = AppDriverState::SolarSystem;
-				ps.takeoff();
+				ps->takeoff();
 			}
 			break;
 
@@ -1088,7 +1194,7 @@ bool AppDriver::handleMousePress(float frameTime, Uint8 button)
 
 bool AppDriver::handleKeyDown(float frameTime, SDLKey key)
 {
-	auto& ps = mGameState.getPlayerShip();
+	auto ps = mGameState.getPlayerShip();
 	switch(mState) {
 		case AppDriverState::SpaceCombat:
 		case AppDriverState::SolarSystem:
@@ -1099,7 +1205,7 @@ bool AppDriver::handleKeyDown(float frameTime, SDLKey key)
 				case SDLK_SPACE:
 				case SDLK_RETURN:
 					mState = AppDriverState::SolarSystem;
-					ps.takeoff();
+					ps->takeoff();
 					break;
 
 				default:
@@ -1146,11 +1252,24 @@ bool AppDriver::handleKeyUp(float frameTime, SDLKey key)
 	return false;
 }
 
+void AppDriver::printInfo()
+{
+	for(auto ss : mGameState.getShips()) {
+		auto t = ss->getTrader();
+		printf("Spaceship %3u, %.2f money, %3d space.\n",
+				ss->getID(), t.getMoney(), t.storageLeft());
+		for(const auto& it : t.getStorage()) {
+			if(it.second)
+				printf("\t%-20s %-3u\n", it.first.c_str(), it.second);
+		}
+	}
+}
+
 bool AppDriver::handleSpaceKey(SDLKey key, bool down)
 {
 	float acc = 0.0f;
 	float side = 0.0f;
-	auto& ps = mGameState.getPlayerShip();
+	auto ps = mGameState.getPlayerShip();
 
 	switch(key) {
 		case SDLK_w:
@@ -1158,7 +1277,7 @@ bool AppDriver::handleSpaceKey(SDLKey key, bool down)
 				acc = 1.0f;
 			else
 				acc = 0.0f;
-			ps.Thrust = acc;
+			ps->Thrust = acc;
 			break;
 
 		case SDLK_s:
@@ -1166,7 +1285,7 @@ bool AppDriver::handleSpaceKey(SDLKey key, bool down)
 				acc = -1.0f;
 			else
 				acc = 0.0f;
-			ps.Thrust = acc;
+			ps->Thrust = acc;
 			break;
 
 		case SDLK_a:
@@ -1174,7 +1293,7 @@ bool AppDriver::handleSpaceKey(SDLKey key, bool down)
 				side = 1.0f;
 			else
 				side = 0.0f;
-			ps.SideThrust = side;
+			ps->SideThrust = side;
 			break;
 
 		case SDLK_d:
@@ -1182,7 +1301,7 @@ bool AppDriver::handleSpaceKey(SDLKey key, bool down)
 				side = -1.0f;
 			else
 				side = 0.0f;
-			ps.SideThrust = side;
+			ps->SideThrust = side;
 			break;
 
 		case SDLK_PLUS:
@@ -1219,8 +1338,13 @@ bool AppDriver::handleSpaceKey(SDLKey key, bool down)
 		case SDLK_RETURN:
 			if(down && mLandTarget) {
 				mState = AppDriverState::Landed;
-				ps.land(mLandTarget);
+				ps->land(mLandTarget);
 			}
+			break;
+
+		case SDLK_F1:
+			if(down)
+				printInfo();
 			break;
 
 		default:
@@ -1237,21 +1361,23 @@ bool AppDriver::prerenderUpdate(float frameTime)
 
 		mGameState.update(frameTime);
 
-		auto& ps = mGameState.getPlayerShip();
+		auto ps = mGameState.getPlayerShip();
 		if(mState == AppDriverState::SpaceCombat) {
 			if(mCheckCombatTimer.check(frameTime)) {
 				checkCombat();
 			}
 		} else {
-			mLandTarget = ps.getClosestObject(nullptr);
+			mLandTarget = ps->getClosestObject(nullptr);
 
-			if(mLandTarget && !ps.canLand(*mLandTarget)) {
+			if(mLandTarget && !ps->canLand(*mLandTarget)) {
 				mLandTarget = nullptr;
 			}
 		}
 
-		mCamera.x = ps.getPosition().x;
-		mCamera.y = ps.getPosition().y;
+		// ps might have changed due to end of combat
+		ps = mGameState.getPlayerShip();
+		mCamera.x = ps->getPosition().x;
+		mCamera.y = ps->getPosition().y;
 	}
 	return false;
 }
@@ -1262,12 +1388,12 @@ bool AppDriver::checkCombat()
 	int numNearbyOpponents = 0;
 	const auto& ps = mGameState.getPlayerShip();
 	for(const auto& ss : mGameState.getShips()) {
-		if(ss.isPlayer())
+		if(ss->isPlayer())
 			continue;
 
-		if(ss.isAlive()) {
+		if(ss->isAlive()) {
 			numOpponents++;
-			if(Entity::distanceBetween(ps, ss) < 500.0f)
+			if(Entity::distanceBetween(*ps, *ss) < 500.0f)
 				numNearbyOpponents++;
 		}
 	}
