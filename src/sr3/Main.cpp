@@ -4,6 +4,8 @@
 #include <map>
 #include <cfloat>
 
+#include <boost/shared_ptr.hpp>
+
 #include "common/SDL_utils.h"
 #include "common/DriverFramework.h"
 #include "common/FontConfig.h"
@@ -178,15 +180,18 @@ class Market {
 	public:
 		Market(float money, unsigned int storage);
 		float getPrice(const std::string& product) const;
+		unsigned int items(const std::string& product) const;
+		float getMoney() const;
 		const std::map<std::string, unsigned int>& getStorage() const { return mTrader.getStorage(); }
 		unsigned int buy(const std::string& product, unsigned int number, Trader& buyer);
 		unsigned int sell(const std::string& product, unsigned int number, Trader& seller);
-		Trader& getTrader() { return mTrader; }
 		const Trader& getTrader() const { return mTrader; }
+		void updatePrices();
 
 	private:
 		std::map<std::string, float> mPrices;
 		Trader mTrader;
+		std::map<std::string, int> mSurplus;
 };
 
 Market::Market(float money, unsigned int storage)
@@ -228,14 +233,47 @@ float Market::getPrice(const std::string& product) const
 		return it->second;
 }
 
+unsigned int Market::items(const std::string& product) const
+{
+	return mTrader.items(product);
+}
+
+float Market::getMoney() const
+{
+	return mTrader.getMoney();
+}
+
 unsigned int Market::buy(const std::string& product, unsigned int number, Trader& buyer)
 {
-	return mTrader.buy(product, number, getPrice(product), buyer);
+	auto i = mTrader.buy(product, number, getPrice(product), buyer);
+	mSurplus[product] -= i;
+	return i;
 }
 
 unsigned int Market::sell(const std::string& product, unsigned int number, Trader& seller)
 {
-	return mTrader.sell(product, number, getPrice(product), seller);
+	auto i = mTrader.sell(product, number, getPrice(product), seller);
+	mSurplus[product] += i;
+	return i;
+}
+
+void Market::updatePrices()
+{
+	for(const auto& it : mTrader.getStorage()) {
+		auto prodname = it.first;
+		auto trans_it = mSurplus.find(prodname);
+		auto hadTrans = trans_it != mSurplus.end();
+		if(!hadTrans)
+			continue;
+		auto surp = trans_it->second;
+		assert(mPrices.find(prodname) != mPrices.end());
+		if(surp > 0) {
+			mPrices[prodname] = mPrices[prodname] * 0.95f;
+		} else if(surp < 0 || (surp == 0 && it.second == 0)) {
+			mPrices[prodname] = mPrices[prodname] * 1.05f;
+		}
+	}
+	mSurplus.clear();
 }
 
 
@@ -260,7 +298,6 @@ class SolarObject : public Entity {
 		SOType getType() const { return mObjectType; }
 		Market* getMarket() { return &mMarket; }
 		const Market* getMarket() const { return &mMarket; }
-		Trader& getTrader() { return mMarket.getTrader(); }
 		const Trader& getTrader() const { return mMarket.getTrader(); }
 		const std::string& getName() const { return mName; }
 
@@ -335,28 +372,40 @@ TradeRoute::TradeRoute(SolarObject* from, SolarObject* to, const std::string& pr
 class TradeNetwork {
 	public:
 		void addTradeRoute(SolarObject* from, SolarObject* to, const std::string& product);
-		std::vector<TradeRoute*>& getTradeRoutesFrom(const SolarObject* from);
-		const std::vector<TradeRoute*>& getTradeRoutesFrom(const SolarObject* from) const;
+		void clearTradeRoutes();
+		std::vector<boost::shared_ptr<TradeRoute>>& getTradeRoutesFrom(const SolarObject* from);
+		const std::vector<boost::shared_ptr<TradeRoute>>& getTradeRoutesFrom(const SolarObject* from) const;
+		const std::map<const SolarObject*, std::vector<boost::shared_ptr<TradeRoute>>>& getTradeRoutes() const;
 
 	private:
-		std::map<const SolarObject*, std::vector<TradeRoute*>> mTradeRoutes;
+		std::map<const SolarObject*, std::vector<boost::shared_ptr<TradeRoute>>> mTradeRoutes;
 };
 
 void TradeNetwork::addTradeRoute(SolarObject* from, SolarObject* to, const std::string& product)
 {
-	mTradeRoutes[from].push_back(new TradeRoute(from, to, product));
+	mTradeRoutes[from].push_back(boost::shared_ptr<TradeRoute>(new TradeRoute(from, to, product)));
 }
 
-std::vector<TradeRoute*>& TradeNetwork::getTradeRoutesFrom(const SolarObject* from)
+void TradeNetwork::clearTradeRoutes()
 {
-	static std::vector<TradeRoute*> empty;
+	mTradeRoutes.clear();
+}
+
+std::vector<boost::shared_ptr<TradeRoute>>& TradeNetwork::getTradeRoutesFrom(const SolarObject* from)
+{
+	static std::vector<boost::shared_ptr<TradeRoute>> empty;
 	auto it = mTradeRoutes.find(from);
 	return it == mTradeRoutes.end() ? empty : it->second;
 }
 
-const std::vector<TradeRoute*>& TradeNetwork::getTradeRoutesFrom(const SolarObject* from) const
+const std::map<const SolarObject*, std::vector<boost::shared_ptr<TradeRoute>>>& TradeNetwork::getTradeRoutes() const
 {
-	static std::vector<TradeRoute*> empty;
+	return mTradeRoutes;
+}
+
+const std::vector<boost::shared_ptr<TradeRoute>>& TradeNetwork::getTradeRoutesFrom(const SolarObject* from) const
+{
+	static std::vector<boost::shared_ptr<TradeRoute>> empty;
 	auto it = mTradeRoutes.find(from);
 	return it == mTradeRoutes.end() ? empty : it->second;
 }
@@ -374,8 +423,11 @@ class SolarSystem {
 		void update(float time);
 		TradeNetwork& getTradeNetwork() { return mTradeNetwork; }
 		const TradeNetwork& getTradeNetwork() const { return mTradeNetwork; }
+		void updatePrices();
 
 	private:
+		void updateTradeNetwork();
+
 		std::vector<SolarObject*> mObjects;
 		TradeNetwork mTradeNetwork;
 };
@@ -390,7 +442,7 @@ class SpaceShipAI {
 		void handleLanding(SpaceShip* ss);
 		SolarObject* mTarget = nullptr;
 		Countdown mLandedTimer;
-		TradeRoute* mTradeRoute = nullptr;
+		boost::shared_ptr<TradeRoute> mTradeRoute;
 		SpaceShip* mSS = nullptr;
 };
 
@@ -603,8 +655,15 @@ SolarSystem::SolarSystem()
 	mObjects.push_back(m8);
 	mObjects.push_back(m9);
 
+	updateTradeNetwork();
+}
+
+void SolarSystem::updateTradeNetwork()
+{
+	mTradeNetwork.clearTradeRoutes();
 	ProductDefinitions pd;
 	const auto& products = pd.getNames();
+
 	for(SolarObject* o : mObjects) {
 		const auto& m1 = o->getMarket();
 		const auto& stor = m1->getStorage();
@@ -615,13 +674,20 @@ SolarSystem::SolarSystem()
 			const auto& m2 = o2->getMarket();
 			for(const auto& prod : products) {
 				auto it = stor.find(prod);
-				if(it != stor.end() && it->second > 10 && m2->getPrice(prod) > 1.2f * m1->getPrice(prod)) {
+				if(it != stor.end() && it->second > 0 && m2->getPrice(prod) > 1.05f * m1->getPrice(prod)) {
 					mTradeNetwork.addTradeRoute(o, o2, prod);
-					std::cout << "Trade route from " << o->getName() << " to " << o2->getName() << " for " << prod << ".\n";
 				}
 			}
 		}
 	}
+}
+
+void SolarSystem::updatePrices()
+{
+	for(auto& obj : mObjects) {
+		obj->getMarket()->updatePrices();
+	}
+	updateTradeNetwork();
 }
 
 SolarSystem::~SolarSystem()
@@ -702,11 +768,6 @@ void SpaceShipAI::handleLanding(SpaceShip* ss)
 			verb = " sold ";
 			mTradeRoute = nullptr;
 		}
-		std::cout << "AI Ship " << ss->getID() << " at " << landobj->getName() << ": " << verb << num <<
-			" units of " << prod << " for " <<
-			(num * landobj->getMarket()->getPrice(prod)) << " credits.\n";
-	} else {
-		std::cout << "AI Ship " << ss->getID() << " at " << landobj->getName() << ".\n";
 	}
 
 	if(!mTarget) {
@@ -723,7 +784,7 @@ void SpaceShipAI::handleLanding(SpaceShip* ss)
 			if(index == 0 && objs.size() > 1)
 				index++;
 			mTarget = objs[index];
-			mTradeRoute = nullptr;
+			mTradeRoute = boost::shared_ptr<TradeRoute>();
 		}
 	}
 }
@@ -756,10 +817,12 @@ class GameState {
 		bool mSolar = false;
 		SolarSystem mSystem;
 		SteadyTimer mSpawnSolarShipTimer;
+		SteadyTimer mUpdatePricesTimer;
 };
 
 GameState::GameState()
-	: mSpawnSolarShipTimer(0.8f)
+	: mSpawnSolarShipTimer(0.8f),
+	mUpdatePricesTimer(10.0f)
 {
 	// player
 	mCombatShips.push_back(new SpaceShip(true, nullptr));
@@ -814,6 +877,10 @@ void GameState::update(float t)
 			if(mSolarShips.size() < 20 && (rand() % 3) == 0) {
 				spawnSolarShip();
 			}
+		}
+
+		if(mUpdatePricesTimer.check(t)) {
+			mSystem.updatePrices();
 		}
 	}
 }
@@ -906,6 +973,7 @@ class AppDriver : public Driver {
 		virtual bool handleKeyDown(float frameTime, SDLKey key) override;
 		virtual bool handleKeyUp(float frameTime, SDLKey key) override;
 		virtual bool prerenderUpdate(float frameTime) override;
+		virtual void render() override;
 
 	private:
 		void drawMenu();
@@ -928,6 +996,8 @@ class AppDriver : public Driver {
 		float mZoom = 1.0f;
 		const float MaxZoomLevel = 0.001f;
 		const SolarObject* mLandTarget = nullptr;
+		unsigned int mFrameSkip = 1;
+		unsigned int mFramesSkipped = 0;
 };
 
 AppDriver::AppDriver()
@@ -1263,6 +1333,35 @@ void AppDriver::printInfo()
 				printf("\t%-20s %-3u\n", it.first.c_str(), it.second);
 		}
 	}
+
+	ProductDefinitions pd;
+	const auto& products = pd.getNames();
+	printf("%-20s %-8s ", "System", "Money");
+	for(auto& p : products) {
+		printf("%-16s ", p.c_str());
+	}
+	printf("\n");
+	for(const auto& obj : mGameState.getSolarSystem().getObjects()) {
+		printf("%-20s %-8.2f ", obj->getName().c_str(), obj->getMarket()->getMoney());
+		const auto& m = obj->getMarket();
+		for(auto& p : products) {
+			auto i = m->getPrice(p);
+			if(i >= 0.0f)
+				printf("%-7.2f %-5d   ", m->getPrice(p), m->items(p));
+			else
+				printf("                ");
+		}
+		printf("\n");
+	}
+
+	for(auto it : mGameState.getSolarSystem().getTradeNetwork().getTradeRoutes()) {
+		for(auto it2 : it.second) {
+			printf("Trade route from %-20s to %-20s for %-20s\n",
+					it2->getFrom()->getName().c_str(),
+					it2->getTo()->getName().c_str(),
+					it2->getProduct().c_str());
+		}
+	}
 }
 
 bool AppDriver::handleSpaceKey(SDLKey key, bool down)
@@ -1347,6 +1446,22 @@ bool AppDriver::handleSpaceKey(SDLKey key, bool down)
 				printInfo();
 			break;
 
+		case SDLK_F11:
+			if(down && mFrameSkip > 1) {
+				mFrameSkip /= 2;
+				std::cout << "Frame skip: " << mFrameSkip << "\n";
+				mFramesSkipped = mFrameSkip;
+			}
+			break;
+
+		case SDLK_F12:
+			if(down && mFrameSkip < 128) {
+				mFrameSkip *= 2;
+				std::cout << "Frame skip: " << mFrameSkip << "\n";
+				mFramesSkipped = mFrameSkip;
+			}
+			break;
+
 		default:
 			break;
 	}
@@ -1380,6 +1495,18 @@ bool AppDriver::prerenderUpdate(float frameTime)
 		mCamera.y = ps->getPosition().y;
 	}
 	return false;
+}
+
+void AppDriver::render()
+{
+	if(mFrameSkip < 2) {
+		Driver::render();
+	} else {
+		if(mFramesSkipped-- <= 0) {
+			mFramesSkipped = mFrameSkip;
+			Driver::render();
+		}
+	}
 }
 
 bool AppDriver::checkCombat()
