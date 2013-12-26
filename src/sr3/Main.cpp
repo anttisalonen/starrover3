@@ -287,6 +287,41 @@ enum class SOType {
 	RockyMethane
 };
 
+class Public {
+	public:
+		Public(unsigned int num, float money);
+
+	private:
+		unsigned int mNum; // unit: thousands
+		float mMoney;
+};
+
+Public::Public(unsigned int num, float money)
+	: mNum(num),
+	mMoney(money)
+{
+	assert(mNum <= 10000000); // cap at 10 billion
+}
+
+class Settlement {
+	public:
+		Settlement(unsigned int marketlevel);
+		Market* getMarket() { return &mMarket; }
+		const Market* getMarket() const { return &mMarket; }
+		const Trader& getTrader() const { return mMarket.getTrader(); }
+
+	private:
+		Market mMarket;
+		Public mPublic;
+};
+
+Settlement::Settlement(unsigned int marketlevel)
+	: mMarket(marketlevel * 1000.0f, marketlevel * 10000),
+	mPublic(pow(10, marketlevel - 1), marketlevel * 1000.0f)
+{
+	assert(marketlevel <= 8);
+}
+
 class SolarObject : public Entity {
 	public:
 		SolarObject(const std::string& name, float size, float mass);
@@ -296,10 +331,13 @@ class SolarObject : public Entity {
 		float getMass() const { return mMass; }
 		virtual void update(float time) override;
 		SOType getType() const { return mObjectType; }
-		Market* getMarket() { return &mMarket; }
-		const Market* getMarket() const { return &mMarket; }
-		const Trader& getTrader() const { return mMarket.getTrader(); }
+		Settlement* getSettlement() { return mSettlement; }
+		const Settlement* getSettlement() const { return mSettlement; }
 		const std::string& getName() const { return mName; }
+		bool hasMarket() const { return mSettlement != nullptr; }
+		Market* getMarket() { assert(hasMarket()); return mSettlement->getMarket(); }
+		const Market* getMarket() const { assert(hasMarket()); return mSettlement->getMarket(); }
+		const Trader& getTrader() const { assert(hasMarket()); return mSettlement->getMarket()->getTrader(); }
 
 	private:
 		std::string mName;
@@ -310,15 +348,14 @@ class SolarObject : public Entity {
 		float mSpeed = 0.0f;
 		const SolarObject* mCenter = nullptr;
 		SOType mObjectType = SOType::GasGiant;
-		Market mMarket;
+		Settlement* mSettlement = nullptr;
 };
 
 SolarObject::SolarObject(const std::string& name, float size, float mass)
 	: mName(name),
 	mSize(size * 20.0f),
 	mMass(mass * 20.0f),
-	mObjectType(SOType::Star),
-	mMarket(0, 0)
+	mObjectType(SOType::Star)
 {
 }
 
@@ -331,10 +368,11 @@ SolarObject::SolarObject(const SolarObject* center, const std::string& name, SOT
 	mOrbitPosition(rand() % 100 * 0.01f),
 	mSpeed(speed * 0.002f),
 	mCenter(center),
-	mObjectType(type),
-	mMarket(marketlevel * 1000.0f, marketlevel * 10000)
+	mObjectType(type)
 {
-	assert(marketlevel <= 10);
+	if(marketlevel > 0) {
+		mSettlement = new Settlement(marketlevel);
+	}
 	update(0.0f);
 }
 
@@ -629,7 +667,7 @@ SolarSystem::SolarSystem()
 	mObjects.push_back(star);
 	mObjects.push_back(new SolarObject(star, "Mercury", SOType::RockyNoAtmosphere, 0.5f, 0.5f, 0.4f, 3.0f, 0));
 	mObjects.push_back(new SolarObject(star, "Venus", SOType::RockyCarbonDioxide, 0.9f, 0.9f, 0.7f, 2.0f, 1));
-	auto p1 = new SolarObject(star, "Earth", SOType::RockyOxygen, 1.0f, 1.0f, 1.0f, 1.0f, 9);
+	auto p1 = new SolarObject(star, "Earth", SOType::RockyOxygen, 1.0f, 1.0f, 1.0f, 1.0f, 8);
 	auto m1 = new SolarObject(p1, "Moon", SOType::RockyNoAtmosphere, 0.4f, 0.2f, 0.1f, 3.0f, 3);
 	mObjects.push_back(p1);
 	mObjects.push_back(m1);
@@ -665,10 +703,16 @@ void SolarSystem::updateTradeNetwork()
 	const auto& products = pd.getNames();
 
 	for(SolarObject* o : mObjects) {
+		if(!o->hasMarket())
+			continue;
+
 		const auto& m1 = o->getMarket();
 		const auto& stor = m1->getStorage();
 		for(SolarObject* o2 : mObjects) {
 			if(o == o2)
+				continue;
+
+			if(!o2->hasMarket())
 				continue;
 
 			const auto& m2 = o2->getMarket();
@@ -685,7 +729,8 @@ void SolarSystem::updateTradeNetwork()
 void SolarSystem::updatePrices()
 {
 	for(auto& obj : mObjects) {
-		obj->getMarket()->updatePrices();
+		if(obj->hasMarket())
+			obj->getMarket()->updatePrices();
 	}
 	updateTradeNetwork();
 }
@@ -759,11 +804,13 @@ void SpaceShipAI::handleLanding(SpaceShip* ss)
 		const char* verb = " ? ";
 		if(landobj == mTradeRoute->getFrom()) {
 			// buy
+			assert(landobj->hasMarket());
 			num = landobj->getMarket()->buy(prod, trader.storageLeft(), trader);
 			verb = " bought ";
 			mTarget = mTradeRoute->getTo();
 		} else if(landobj == mTradeRoute->getTo()) {
 			// sell
+			assert(landobj->hasMarket());
 			num = landobj->getMarket()->sell(prod, trader.items(prod), trader);
 			verb = " sold ";
 			mTradeRoute = nullptr;
@@ -1026,21 +1073,25 @@ void AppDriver::drawMarket()
 	assert(ps->landed());
 	const auto* obj = ps->getLandObject();
 	assert(obj);
-	const auto* m = obj->getMarket();
-	assert(m);
-	const auto& tr = obj->getTrader();
-	const auto& stor = m->getStorage();
-	char buf[256];
-	snprintf(buf, 255, "%s: market has %.2f credits", obj->getName().c_str(), tr.getMoney());
-	text.push_back(std::string(buf));
-	snprintf(buf, 255, "%-20s %-10s %-10s", "Product", "Quantity", "Price");
-	text.push_back(std::string(buf));
-	for(const auto& st : stor) {
-		snprintf(buf, 255, "%-20s %-10d %-10.2f", st.first.c_str(), st.second, m->getPrice(st.first));
+	if(obj->hasMarket()) {
+		const auto* m = obj->getMarket();
+		assert(m);
+		const auto& tr = obj->getTrader();
+		const auto& stor = m->getStorage();
+		char buf[256];
+		snprintf(buf, 255, "%s: market has %.2f credits", obj->getName().c_str(), tr.getMoney());
 		text.push_back(std::string(buf));
+		snprintf(buf, 255, "%-20s %-10s %-10s", "Product", "Quantity", "Price");
+		text.push_back(std::string(buf));
+		for(const auto& st : stor) {
+			snprintf(buf, 255, "%-20s %-10d %-10.2f", st.first.c_str(), st.second, m->getPrice(st.first));
+			text.push_back(std::string(buf));
+		}
+		snprintf(buf, 255, "Ship storage %d      %.2f credits", ps->getTrader().storageLeft(), ps->getTrader().getMoney());
+		text.push_back(std::string(buf));
+	} else {
+		text.push_back("No market. Press space to exit.");
 	}
-	snprintf(buf, 255, "Ship storage %d      %.2f credits", ps->getTrader().storageLeft(), ps->getTrader().getMoney());
-	text.push_back(std::string(buf));
 
 	float i = getScreenHeight() * 0.9f;
 	for(auto& t : text) {
@@ -1342,6 +1393,9 @@ void AppDriver::printInfo()
 	}
 	printf("\n");
 	for(const auto& obj : mGameState.getSolarSystem().getObjects()) {
+		if(!obj->hasMarket())
+			continue;
+
 		printf("%-20s %-8.2f ", obj->getName().c_str(), obj->getMarket()->getMoney());
 		const auto& m = obj->getMarket();
 		for(auto& p : products) {
