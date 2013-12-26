@@ -14,6 +14,7 @@
 #include "common/Vehicle.h"
 #include "common/Steering.h"
 #include "common/Clock.h"
+#include "common/Random.h"
 
 static const float SolarSystemSpeedCoefficient = 10.0f;
 static const float PlanetSizeCoefficient = 500.0f;
@@ -32,6 +33,7 @@ class Storage {
 		unsigned int remove(const std::string& product, unsigned int num);
 		unsigned int capacityLeft() const { return mCapacityLeft; }
 		const std::map<std::string, unsigned int>& getStorage() const { return mStorage; }
+		void clearAll();
 
 	private:
 		unsigned int mMaxCapacity;
@@ -81,6 +83,13 @@ unsigned int Storage::remove(const std::string& product, unsigned int num)
 	}
 }
 
+void Storage::clearAll()
+{
+	for(auto it : mStorage) {
+		remove(it.first, it.second);
+	}
+	assert(mCapacityLeft == mMaxCapacity);
+}
 
 class Trader {
 	public:
@@ -93,6 +102,7 @@ class Trader {
 		unsigned int storageLeft() const;
 		const std::map<std::string, unsigned int>& getStorage() const { return mStorage.getStorage(); }
 		unsigned int items(const std::string& product) const;
+		void clearAll();
 
 	private:
 		float mMoney;
@@ -154,6 +164,10 @@ unsigned int Trader::items(const std::string& product) const
 	return mStorage.items(product);
 }
 
+void Trader::clearAll()
+{
+	mStorage.clearAll();
+}
 
 class ProductDefinitions {
 	public:
@@ -287,21 +301,53 @@ enum class SOType {
 	RockyMethane
 };
 
-class Public {
+class Population {
 	public:
-		Public(unsigned int num, float money);
+		Population(unsigned int num, float money);
+		void consume(Market& m);
+		float getMoney() const;
+		unsigned int getNum() const; // unit: thousands
 
 	private:
 		unsigned int mNum; // unit: thousands
-		float mMoney;
+		Trader mTrader;
 };
 
-Public::Public(unsigned int num, float money)
+Population::Population(unsigned int num, float money)
 	: mNum(num),
-	mMoney(money)
+	mTrader(money * num, 100000)
 {
 	assert(mNum <= 10000000); // cap at 10 billion
 }
+
+void Population::consume(Market& m)
+{
+	float totalFruitConsumption = mNum / 100000.0f;
+	float fruitRem = fmodf(totalFruitConsumption, mNum);
+	unsigned int remFruitConsumption = fruitRem != 1.0f ? (Random::uniform() < fruitRem ? 1 : 0) : 0;
+	unsigned int fruitConsumption = (unsigned int) totalFruitConsumption + remFruitConsumption;
+	if(fruitConsumption) {
+		unsigned int bought = m.buy("Fruit", fruitConsumption, mTrader);
+
+		if(bought < fruitConsumption)
+			mNum = mNum * 0.95f;
+		else
+			mNum = mNum * 1.05f;
+	}
+
+	mTrader.clearAll();
+}
+
+float Population::getMoney() const
+{
+	return mTrader.getMoney();
+}
+
+unsigned int Population::getNum() const
+{
+	return mNum;
+}
+
 
 class Settlement {
 	public:
@@ -309,18 +355,38 @@ class Settlement {
 		Market* getMarket() { return &mMarket; }
 		const Market* getMarket() const { return &mMarket; }
 		const Trader& getTrader() const { return mMarket.getTrader(); }
+		void update();
+		unsigned int getPopulation() const;
+		float getPopulationMoney() const;
 
 	private:
 		Market mMarket;
-		Public mPublic;
+		Population mPopulation;
 };
 
 Settlement::Settlement(unsigned int marketlevel)
 	: mMarket(marketlevel * 1000.0f, marketlevel * 10000),
-	mPublic(pow(10, marketlevel - 1), marketlevel * 1000.0f)
+	mPopulation(pow(10, marketlevel - 1), marketlevel * 100)
 {
 	assert(marketlevel <= 8);
 }
+
+void Settlement::update()
+{
+	mPopulation.consume(mMarket);
+	mMarket.updatePrices();
+}
+
+unsigned int Settlement::getPopulation() const
+{
+	return mPopulation.getNum();
+}
+
+float Settlement::getPopulationMoney() const
+{
+	return mPopulation.getMoney();
+}
+
 
 class SolarObject : public Entity {
 	public:
@@ -338,6 +404,7 @@ class SolarObject : public Entity {
 		Market* getMarket() { assert(hasMarket()); return mSettlement->getMarket(); }
 		const Market* getMarket() const { assert(hasMarket()); return mSettlement->getMarket(); }
 		const Trader& getTrader() const { assert(hasMarket()); return mSettlement->getMarket()->getTrader(); }
+		void updateSettlement();
 
 	private:
 		std::string mName;
@@ -382,6 +449,12 @@ void SolarObject::update(float time)
 	auto origo = mCenter ? mCenter->getPosition() : Vector3();
 	mPosition.x = origo.x + mOrbit * sin(mOrbitPosition * PI * 2.0f);
 	mPosition.y = origo.y + mOrbit * cos(mOrbitPosition * PI * 2.0f);
+}
+
+void SolarObject::updateSettlement()
+{
+	if(mSettlement)
+		mSettlement->update();
 }
 
 class TradeRoute {
@@ -729,8 +802,9 @@ void SolarSystem::updateTradeNetwork()
 void SolarSystem::updatePrices()
 {
 	for(auto& obj : mObjects) {
-		if(obj->hasMarket())
-			obj->getMarket()->updatePrices();
+		if(obj->hasMarket()) {
+			obj->updateSettlement();
+		}
 	}
 	updateTradeNetwork();
 }
@@ -1030,6 +1104,7 @@ class AppDriver : public Driver {
 		bool handleSpaceKey(SDLKey key, bool down);
 		bool checkCombat();
 		void printInfo();
+		std::string getPopulationString(const SolarObject& obj) const;
 
 		TTF_Font* mFont;
 		TTF_Font* mMonoFont;
@@ -1066,6 +1141,23 @@ bool AppDriver::init()
 	return true;
 }
 
+std::string AppDriver::getPopulationString(const SolarObject& obj) const
+{
+	assert(obj.hasMarket());
+	auto pop = obj.getSettlement()->getPopulation();
+	char buf[256];
+	if(pop > 1000000) {
+		snprintf(buf, 255, "%.2f billion", pop / 1000000.0f);
+		return std::string(buf);
+	} else if(pop > 1000) {
+		snprintf(buf, 255, "%.2f million", pop / 1000.0f);
+		return std::string(buf);
+	} else {
+		snprintf(buf, 255, "%u", pop * 1000);
+		return std::string(buf);
+	}
+}
+
 void AppDriver::drawMarket()
 {
 	std::vector<std::string> text;
@@ -1080,6 +1172,11 @@ void AppDriver::drawMarket()
 		const auto& stor = m->getStorage();
 		char buf[256];
 		snprintf(buf, 255, "%s: market has %.2f credits", obj->getName().c_str(), tr.getMoney());
+		text.push_back(std::string(buf));
+
+		auto popstr = getPopulationString(*obj);
+		snprintf(buf, 255, "Population of %s with %.2f credits", 
+				popstr.c_str(), obj->getSettlement()->getPopulationMoney());
 		text.push_back(std::string(buf));
 		snprintf(buf, 255, "%-20s %-10s %-10s", "Product", "Quantity", "Price");
 		text.push_back(std::string(buf));
@@ -1387,7 +1484,7 @@ void AppDriver::printInfo()
 
 	ProductDefinitions pd;
 	const auto& products = pd.getNames();
-	printf("%-20s %-8s ", "System", "Money");
+	printf("%-20s %-8s %-14s %-14s ", "System", "Money", "Population", "Pop money");
 	for(auto& p : products) {
 		printf("%-16s ", p.c_str());
 	}
@@ -1396,7 +1493,9 @@ void AppDriver::printInfo()
 		if(!obj->hasMarket())
 			continue;
 
-		printf("%-20s %-8.2f ", obj->getName().c_str(), obj->getMarket()->getMoney());
+		printf("%-20s %-8.2f %-14s %-14.2f ", obj->getName().c_str(), obj->getMarket()->getMoney(),
+				getPopulationString(*obj).c_str(),
+				obj->getSettlement()->getPopulationMoney());
 		const auto& m = obj->getMarket();
 		for(auto& p : products) {
 			auto i = m->getPrice(p);
