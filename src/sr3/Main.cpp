@@ -18,8 +18,13 @@
 
 static const float SolarSystemSpeedCoefficient = 10.0f;
 static const float PlanetSizeCoefficient = 500.0f;
-static const float LabourRequiredCoefficient = 0.7f; // labour units required per unit
+static const float FruitLabourRequiredCoefficient = 0.7f; // labour units required per unit
+static const float LuxuryLabourRequiredCoefficient = 0.5f; // labour units required per unit
 static const float FruitConsumptionCoefficient = 0.1f; // units consumed per person
+static const float LuxuryConsumptionCoefficient = 0.1f; // units consumed per person
+static const unsigned int FruitLabourCap = 0; // Can only use maximum n units of labour per update
+static const unsigned int LuxuryLabourCap = 1000;
+static const float LabourProducedByCitizen = 0.1f;
 
 using namespace Common;
 
@@ -390,6 +395,8 @@ class Population {
 	private:
 		void consume(Market& m);
 		void work(Market& m);
+		unsigned int calculateConsumption(float coeff) const;
+
 		unsigned int mNum;
 		Trader mTrader;
 };
@@ -407,27 +414,30 @@ void Population::update(Market& m)
 	work(m);
 }
 
+unsigned int Population::calculateConsumption(float coeff) const
+{
+	float totalConsumption = mNum * coeff;
+	float rem = fmodf(totalConsumption, 1.0f);
+	unsigned int remConsumption = rem != 0.0f ? (Random::uniform() < rem ? 1 : 0) : 0;
+	return (unsigned int) totalConsumption + remConsumption;
+}
+
 void Population::consume(Market& m)
 {
-	float totalFruitConsumption = mNum * FruitConsumptionCoefficient;
-	float fruitRem = fmodf(totalFruitConsumption, 1.0f);
-	unsigned int remFruitConsumption = fruitRem != 0.0f ? (Random::uniform() < fruitRem ? 1 : 0) : 0;
-	unsigned int fruitConsumption = (unsigned int) totalFruitConsumption + remFruitConsumption;
+	unsigned int fruitConsumption = calculateConsumption(FruitConsumptionCoefficient);
 	if(fruitConsumption) {
 		unsigned int bought = m.buy("Fruit", fruitConsumption, mTrader);
 
 		if(bought < fruitConsumption) {
 			mNum = mNum * 0.999f;
-#if 0
-			if(mNum > 1000) {
-				const char* reason = "unknown";
-				if(mTrader.getMoney() < m.getPrice("Fruit"))
-					reason = "no money";
-				else if(m.items("Fruit") == 0)
-					reason = "no fruit";
-				printf("Famine! Need %5u fruit, could only buy %5u. Reason: %s\n",
-						fruitConsumption, bought, reason);
-			}
+#if 1
+			const char* reason = "unknown";
+			if(mTrader.getMoney() < m.getPrice("Fruit"))
+				reason = "no money";
+			else if(m.items("Fruit") == 0)
+				reason = "no fruit";
+			printf("Famine! Need %5u fruit, could only buy %5u. Reason: %s\n",
+					fruitConsumption, bought, reason);
 #endif
 		} else {
 			mNum = mNum * 1.001f;
@@ -435,12 +445,17 @@ void Population::consume(Market& m)
 		mNum = std::min<unsigned int>(mNum, 1000000);
 	}
 
+	unsigned int luxuryConsumption = calculateConsumption(LuxuryConsumptionCoefficient);
+	if(luxuryConsumption) {
+		m.buy("Luxury goods", luxuryConsumption, mTrader);
+	}
+
 	mTrader.clearAll();
 }
 
 void Population::work(Market& m)
 {
-	unsigned int labour = mNum * 0.1f;
+	unsigned int labour = mNum * LabourProducedByCitizen;
 	mTrader.addToStorage("Labour", labour);
 	unsigned int num = m.sell("Labour", labour, mTrader);
 	assert(num == labour);
@@ -506,6 +521,7 @@ class Producer {
 		float deenhance();
 		unsigned int produce(Market& m, const Settlement& settlement);
 		const std::string& getProduct() const { return mProduct; }
+		unsigned int getLevel() const { return mLevel; }
 
 	private:
 		std::string mProduct;
@@ -526,7 +542,9 @@ class Settlement {
 		const Trader& getTrader() const { return mMarket.getTrader(); }
 		void update();
 		unsigned int getPopulation() const;
+		Population* getPopulationObj() { return &mPopulation; }
 		float getPopulationMoney() const;
+		const std::map<std::string, Producer*>& getProducers() const { return mProducers; }
 
 	private:
 		void createNewProducers();
@@ -563,11 +581,34 @@ float Producer::deenhance()
 
 unsigned int Producer::produce(Market& m, const Settlement& settlement)
 {
-	unsigned int wantToProduce = 1.2f * FruitConsumptionCoefficient * settlement.getPopulation();
-	unsigned int requiredLabour = wantToProduce * LabourRequiredCoefficient;
+	float consumptionCoeff = 1.0f;
+	float labourCoeff = 1.0f;
+	unsigned int labourCap = 0;
+	if(mProduct == "Fruit") {
+		consumptionCoeff = FruitConsumptionCoefficient;
+		labourCoeff = FruitLabourRequiredCoefficient;
+		labourCap = FruitLabourCap;
+	} else if(mProduct == "Luxury goods") {
+		consumptionCoeff = LuxuryConsumptionCoefficient;
+		labourCoeff = LuxuryLabourRequiredCoefficient;
+		labourCap = LuxuryLabourCap;
+	} else {
+		assert(0);
+	}
+
+	if(!labourCap)
+		labourCap = UINT_MAX;
+
+	if(m.getPrice(mProduct) < m.getPrice("Labour") * labourCoeff) {
+		printf("Doesn't make sense to produce %s.\n", mProduct.c_str());
+		return 0;
+	}
+
+	unsigned int wantToProduce = UINT_MAX;
+	unsigned int requiredLabour = std::min<unsigned int>(labourCap, wantToProduce * labourCoeff);
 	unsigned int numLabour = m.buy("Labour", requiredLabour, mTrader);
 	assert(mLevel > 0);
-	float wholeProd = numLabour / LabourRequiredCoefficient;
+	float wholeProd = numLabour / labourCoeff;
 	wholeProd = wholeProd * (1.0f + (mLevel - 1) * 0.01f);
 	float rem = fmodf(wholeProd, 1.0f);
 	unsigned int remProd = rem != 0.0f ? (Random::uniform() < rem ? 1 : 0) : 0;
@@ -580,12 +621,14 @@ unsigned int Producer::produce(Market& m, const Settlement& settlement)
 	unsigned int num = 0;
 	if(mTrader.items(mProduct)) {
 		num = m.sell(mProduct, mTrader.items(mProduct), mTrader);
+		printf("Sold %u/%u %s produced with %u/%u labour.\n", wantToProduce,
+				num, mProduct.c_str(), numLabour, requiredLabour);
 	}
 
 #if 0
 	if(num < wantToProduce) {
 		const char* reason = "unknown";
-		if(mTrader.getMoney() - num * m.getPrice("Fruit") < m.getPrice("Labour"))
+		if(mTrader.getMoney() - num * m.getPrice(mProduct) < m.getPrice("Labour"))
 			reason = "factory has no money for labour";
 		else if(numLabour < requiredLabour)
 			reason = "no labour available";
@@ -616,7 +659,6 @@ Settlement::~Settlement()
 
 void Settlement::update()
 {
-	createNewProducers();
 	if(mPopulation.getNum() > 20) {
 		mPopulation.update(mMarket);
 		for(auto it : mProducers) {
@@ -634,6 +676,7 @@ void Settlement::update()
 			mPopulation.removeMoney(unemployment * labourPrice);
 		}
 	}
+	createNewProducers();
 
 	mMarket.updatePrices();
 }
@@ -651,15 +694,28 @@ float Settlement::getPopulationMoney() const
 
 void Settlement::createNewProducers()
 {
-	if(mSolarObject->getType() == SOType::RockyOxygen &&
-			mMarket.getPrice("Fruit") > LabourRequiredCoefficient * mMarket.getPrice("Labour")) {
-		if(mPopulation.getMoney() > 1000.0f) {
-			mPopulation.removeMoney(1000.0f);
-			auto it = mProducers.find("fruit");
-			if(it == mProducers.end()) {
-				mProducers["fruit"] = new Producer("Fruit", 1000.0f);
-			} else {
-				it->second->enhance(1000.0f);
+	for(auto product : {"Fruit", "Luxury goods"}) {
+		if(!strcmp(product, "Fruit") && mSolarObject->getType() != SOType::RockyOxygen)
+			continue;
+
+		float labourCoeff = 1.0f;
+		if(!strcmp(product, "Fruit")) {
+			labourCoeff = FruitLabourRequiredCoefficient;
+		} else if(!strcmp(product, "Luxury goods")) {
+			labourCoeff = LuxuryLabourRequiredCoefficient;
+		} else {
+			assert(0);
+		}
+
+		if(mMarket.getPrice(product) > labourCoeff * mMarket.getPrice("Labour")) {
+			if(mPopulation.getMoney() > 1000.0f) {
+				mPopulation.removeMoney(1000.0f);
+				auto it = mProducers.find(product);
+				if(it == mProducers.end()) {
+					mProducers[product] = new Producer(product, 1000.0f);
+				} else {
+					it->second->enhance(1000.0f);
+				}
 			}
 		}
 	}
@@ -868,7 +924,7 @@ SpaceShip::SpaceShip(bool players, SolarSystem* s)
 	: Vehicle(1.0f, 10000000.0f, 10000000.0f, true),
 	mPlayers(players),
 	mSystem(s),
-	mTrader(100.0f, 20),
+	mTrader(100.0f, 200),
 	mID(++NextID)
 {
 	Color = mPlayers ? Color::White : Color::Red;
@@ -1161,6 +1217,7 @@ void SpaceShipAI::handleLanding(SpaceShip* ss)
 		for(auto it : trader.getStorage()) {
 			landobj->getMarket()->sell(it.first, it.second, trader);
 		}
+
 	}
 
 	// choose next trade
@@ -1178,7 +1235,10 @@ void SpaceShipAI::handleLanding(SpaceShip* ss)
 			std::sort(routes.begin(), routes.end(), [&] (const boost::shared_ptr<TradeRoute>& r1,
 						const boost::shared_ptr<TradeRoute>& r2) -> bool {
 					return getPotentialRevenue(*r1) < getPotentialRevenue(*r2); } );
-			int index = routes.size() - 1;
+			unsigned int index = routes.size() - 1;
+			if(routes.size() > 2)
+				index = (routes.size() + 1) / 2 + rand() % (routes.size() / 2);
+			assert(index < routes.size() && index >= routes.size() / 2);
 			mTradeRoute = routes[index];
 			mTarget = mTradeRoute->getFrom();
 
@@ -1188,6 +1248,14 @@ void SpaceShipAI::handleLanding(SpaceShip* ss)
 				assert(landobj->hasMarket());
 				landobj->getMarket()->buy(prod, trader.storageLeft(), trader);
 				mTarget = mTradeRoute->getTo();
+
+				// if earned enough money, feed money back to the population of the exporting site
+				if(trader.getMoney() > 1000.0f) {
+					auto toDonate = trader.getMoney() - 1000.0f;
+					trader.removeMoney(toDonate);
+					landobj->getSettlement()->getPopulationObj()->addMoney(toDonate);
+					printf("Donated %.2f to %s.\n", toDonate, landobj->getName().c_str());
+				}
 			}
 		} else {
 			// no routes, wander aimlessly
@@ -1796,28 +1864,44 @@ void AppDriver::printInfo()
 	for(const auto& obj : mGameState.getSolarSystem().getObjects()) {
 		if(obj->hasMarket()) {
 			auto rec = obj->getMarket()->getLastRecord();
-			for(auto prod : {"Fruit", "Labour"}) {
+			for(auto prod : {"Fruit", "Labour", "Luxury goods"}) {
 				auto it = rec.find(prod);
 				if(it != rec.end()) {
 					auto demand = it->second.first;
 					auto supply = it->second.second;
-					if(demand)
-						printf("%-10s %-10s %-10u %-10u %-10.2f\n", obj->getName().c_str(),
-								prod, supply, demand, obj->getMarket()->getPrice(prod));
+					printf("%-10s %-10s %-10u %-10u %-10.2f\n", obj->getName().c_str(),
+							prod, supply, demand, obj->getMarket()->getPrice(prod));
 				}
 			}
 		}
 	}
 
-	for(auto it : mGameState.getSolarSystem().getTradeNetwork().getTradeRoutes()) {
-		for(auto it2 : it.second) {
-			printf("Trade route from %-20s to %-20s for %-20s\n",
-					it2->getFrom()->getName().c_str(),
-					it2->getTo()->getName().c_str(),
-					it2->getProduct().c_str());
+	for(const auto& obj : mGameState.getSolarSystem().getObjects()) {
+		if(obj->hasMarket()) {
+			for(auto it : obj->getSettlement()->getProducers()) {
+				printf("%-10s %-3u %s\n", obj->getName().c_str(), it.second->getLevel(), it.first.c_str());
+			}
 		}
 	}
 
+	{
+		unsigned int numRoutes = 0;
+		for(auto it : mGameState.getSolarSystem().getTradeNetwork().getTradeRoutes()) {
+			numRoutes += it.second.size();
+		}
+		if(numRoutes <= 5) {
+			for(auto it : mGameState.getSolarSystem().getTradeNetwork().getTradeRoutes()) {
+				for(auto it2 : it.second) {
+					printf("Trade route from %-20s to %-20s for %-20s\n",
+							it2->getFrom()->getName().c_str(),
+							it2->getTo()->getName().c_str(),
+							it2->getProduct().c_str());
+				}
+			}
+		} else {
+			printf("%zd trade routes.\n", numRoutes);
+		}
+	}
 }
 
 bool AppDriver::handleSpaceKey(SDLKey key, bool down)
