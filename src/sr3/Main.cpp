@@ -18,12 +18,12 @@
 
 static const float SolarSystemSpeedCoefficient = 10.0f;
 static const float PlanetSizeCoefficient = 500.0f;
-static const float FruitLabourRequiredCoefficient = 0.7f; // labour units required per unit
+static const float FruitLabourRequiredCoefficient = 0.3f; // labour units required per unit
 static const float LuxuryLabourRequiredCoefficient = 0.5f; // labour units required per unit
 static const float FruitConsumptionCoefficient = 0.1f; // units consumed per person
-static const float LuxuryConsumptionCoefficient = 0.1f; // units consumed per person
+static const float LuxuryConsumptionCoefficient = 0.2f; // units consumed per person
 static const unsigned int FruitLabourCap = 0; // Can only use maximum n units of labour per update
-static const unsigned int LuxuryLabourCap = 1000;
+static const unsigned int LuxuryLabourCap = 100;
 static const float LabourProducedByCitizen = 0.1f;
 
 using namespace Common;
@@ -269,7 +269,7 @@ class Market {
 };
 
 Market::Market(float money)
-	: mTrader(-1.0f, 0)
+	: mTrader(money, 0)
 {
 	if(money) {
 		int type = rand() % 3;
@@ -325,22 +325,40 @@ void Market::addMoney(float val)
 
 unsigned int Market::buy(const std::string& product, unsigned int number, Trader& buyer)
 {
-	auto i = mTrader.buy(product, number, getPrice(product), buyer);
-	mSurplus[product] -= i;
+	auto p = getPrice(product);
+	auto i = mTrader.buy(product, number, p, buyer);
+	if(i) {
+		mSurplus[product] -= i;
+		if(product == "Labour") {
+			// pay labour credit
+			mTrader.removeMoney(p * i);
+		}
+	}
+
 	mRecord[product].first += i;
 	return i;
 }
 
 unsigned int Market::sell(const std::string& product, unsigned int number, Trader& seller)
 {
-	auto i = mTrader.sell(product, number, getPrice(product), seller);
-	mSurplus[product] += i;
+	auto p = getPrice(product);
+	if(number && product == "Labour") {
+		// loan money for labour since it will always even itself out
+		mTrader.addMoney(p * number);
+	}
+
+	auto i = mTrader.sell(product, number, p, seller);
+
+	if(i)
+		mSurplus[product] += i;
+
 	mRecord[product].second += i;
 	return i;
 }
 
 unsigned int Market::fixLabour()
 {
+	// can simply remove items and consider the labour credit paid
 	auto unemployment = items("Labour");
 	mTrader.clearProduct("Labour");
 	return unemployment;
@@ -355,6 +373,7 @@ std::map<std::string, std::pair<int, int>> Market::getLastRecord()
 
 void Market::updatePrices()
 {
+	assert(mTrader.items("Labour") == 0);
 	for(const auto& it : mTrader.getStorage()) {
 		auto prodname = it.first;
 		auto trans_it = mSurplus.find(prodname);
@@ -363,9 +382,9 @@ void Market::updatePrices()
 			continue;
 		auto surp = trans_it->second;
 		assert(mPrices.find(prodname) != mPrices.end());
-		if(surp > 0) {
+		if(surp > 0 && mPrices[prodname] > 0.01f) {
 			mPrices[prodname] = mPrices[prodname] * 0.95f;
-		} else if(surp < 0 || (surp == 0 && it.second == 0)) {
+		} else {
 			mPrices[prodname] = mPrices[prodname] * 1.05f;
 		}
 	}
@@ -645,7 +664,7 @@ unsigned int Producer::produce(Market& m, const Settlement& settlement)
 
 Settlement::Settlement(unsigned int marketlevel, const SolarObject* obj)
 	: mMarket(marketlevel * 1000000.0f),
-	mPopulation(pow(5, marketlevel) + 200, marketlevel * 10),
+	mPopulation(pow(5, marketlevel) + 200, marketlevel * 1000),
 	mSolarObject(obj)
 {
 	assert(marketlevel <= 8);
@@ -660,6 +679,12 @@ Settlement::~Settlement()
 void Settlement::update()
 {
 	if(mPopulation.getNum() > 20) {
+		if(mPopulation.getMoney() > 10000.0f && mMarket.getMoney() < 10000.0f) {
+			// transfer money from population to market for more liquidity
+			mPopulation.removeMoney(5000.0f);
+			mMarket.addMoney(5000.0f);
+		}
+
 		mPopulation.update(mMarket);
 		for(auto it : mProducers) {
 			auto num = it.second->produce(mMarket, *this);
@@ -670,11 +695,7 @@ void Settlement::update()
 			}
 		}
 
-		auto unemployment = mMarket.fixLabour();
-		if(unemployment) {
-			auto labourPrice = mMarket.getPrice("Labour");
-			mPopulation.removeMoney(unemployment * labourPrice);
-		}
+		mMarket.fixLabour();
 	}
 	createNewProducers();
 
@@ -1115,7 +1136,9 @@ void SolarSystem::updateTradeNetwork()
 			const auto& m2 = o2->getMarket();
 			for(const auto& prod : products) {
 				auto it = stor.find(prod);
-				if(it != stor.end() && it->second > 0 && m2->getPrice(prod) > 1.05f * m1->getPrice(prod)) {
+				if(it != stor.end() && it->second > 0 &&
+						m2->getPrice(prod) > 1.05f * m1->getPrice(prod) &&
+						m2->getMoney() > m2->getPrice(prod)) {
 					mTradeNetwork.addTradeRoute(o, o2, prod);
 				}
 			}
@@ -1199,6 +1222,7 @@ float SpaceShipAI::getPotentialRevenue(const TradeRoute& tr) const
 	auto p1 = m1->getPrice(prod);
 	auto p2 = m2->getPrice(prod);
 	auto volume = std::max(mSS->getTrader().getMaxCapacity(), m1->items(prod));
+	volume = std::min(volume, (unsigned int)(m2->getMoney() / m2->getPrice(prod)));
 	return volume * (p2 - p1);
 }
 
@@ -1250,12 +1274,14 @@ void SpaceShipAI::handleLanding(SpaceShip* ss)
 				mTarget = mTradeRoute->getTo();
 
 				// if earned enough money, feed money back to the population of the exporting site
+#if 0
 				if(trader.getMoney() > 1000.0f) {
 					auto toDonate = trader.getMoney() - 1000.0f;
 					trader.removeMoney(toDonate);
 					landobj->getSettlement()->getPopulationObj()->addMoney(toDonate);
 					printf("Donated %.2f to %s.\n", toDonate, landobj->getName().c_str());
 				}
+#endif
 			}
 		} else {
 			// no routes, wander aimlessly
@@ -1837,7 +1863,7 @@ void AppDriver::printInfo()
 
 	ProductDefinitions pd;
 	const auto& products = pd.getNames();
-	printf("%-20s %-16s %-16s ", "System", "Population", "Pop money");
+	printf("%-20s %-16s %-16s %-16s ", "System", "Population", "Pop money", "Market money");
 	for(auto& p : products) {
 		printf("%-16s ", p.c_str());
 	}
@@ -1846,9 +1872,9 @@ void AppDriver::printInfo()
 		if(!obj->hasMarket())
 			continue;
 
-		printf("%-20s %-16s %-16.2f ", obj->getName().c_str(),
+		printf("%-20s %-16s %-16.2f %-16.2f ", obj->getName().c_str(),
 				getPopulationString(*obj).c_str(),
-				obj->getSettlement()->getPopulationMoney());
+				obj->getSettlement()->getPopulationMoney(), obj->getMarket()->getMoney());
 		const auto& m = obj->getMarket();
 		for(auto& p : products) {
 			auto i = m->getPrice(p);
