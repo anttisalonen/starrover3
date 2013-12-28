@@ -384,7 +384,7 @@ void Market::updatePrices()
 		assert(mPrices.find(prodname) != mPrices.end());
 		if(surp > 0 && mPrices[prodname] > 0.01f) {
 			mPrices[prodname] = mPrices[prodname] * 0.95f;
-		} else {
+		} else if(mTrader.items(prodname) == 0) {
 			mPrices[prodname] = mPrices[prodname] * 1.05f;
 		}
 	}
@@ -1239,13 +1239,15 @@ void SpaceShipAI::handleLanding(SpaceShip* ss)
 	// always sell everything on arrival if possible
 	if(landobj->hasMarket()) {
 		for(auto it : trader.getStorage()) {
-			landobj->getMarket()->sell(it.first, it.second, trader);
+			if(it.second) {
+				landobj->getMarket()->sell(it.first, it.second, trader);
+			}
 		}
 
 	}
 
 	// choose next trade
-	{
+	if(!mTradeRoute || landobj == mTradeRoute->getTo()) {
 		// prefer routes from current location, search all routes otherwise
 		auto& tn = ss->getSystem()->getTradeNetwork();
 		auto routes = tn.getTradeRoutesFrom(landobj);
@@ -1265,24 +1267,6 @@ void SpaceShipAI::handleLanding(SpaceShip* ss)
 			assert(index < routes.size() && index >= routes.size() / 2);
 			mTradeRoute = routes[index];
 			mTarget = mTradeRoute->getFrom();
-
-			// found route, now buy if already on target
-			if(mTradeRoute && landobj == mTradeRoute->getFrom()) {
-				auto prod = mTradeRoute->getProduct();
-				assert(landobj->hasMarket());
-				landobj->getMarket()->buy(prod, trader.storageLeft(), trader);
-				mTarget = mTradeRoute->getTo();
-
-				// if earned enough money, feed money back to the population of the exporting site
-#if 0
-				if(trader.getMoney() > 1000.0f) {
-					auto toDonate = trader.getMoney() - 1000.0f;
-					trader.removeMoney(toDonate);
-					landobj->getSettlement()->getPopulationObj()->addMoney(toDonate);
-					printf("Donated %.2f to %s.\n", toDonate, landobj->getName().c_str());
-				}
-#endif
-			}
 		} else {
 			// no routes, wander aimlessly
 			assert(0);
@@ -1294,6 +1278,24 @@ void SpaceShipAI::handleLanding(SpaceShip* ss)
 			mTarget = objs[index];
 			mTradeRoute = boost::shared_ptr<TradeRoute>();
 		}
+	}
+
+	// buy goods if planned
+	if(mTradeRoute && landobj == mTradeRoute->getFrom()) {
+		auto prod = mTradeRoute->getProduct();
+		assert(landobj->hasMarket());
+		landobj->getMarket()->buy(prod, trader.storageLeft(), trader);
+		mTarget = mTradeRoute->getTo();
+
+#if 0
+		// if earned enough money, feed money back to the population of the exporting site
+		if(trader.getMoney() > 1000.0f) {
+			auto toDonate = trader.getMoney() - 1000.0f;
+			trader.removeMoney(toDonate);
+			landobj->getSettlement()->getPopulationObj()->addMoney(toDonate);
+			printf("Donated %.2f to %s.\n", toDonate, landobj->getName().c_str());
+		}
+#endif
 	}
 
 }
