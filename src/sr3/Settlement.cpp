@@ -141,6 +141,11 @@ unsigned int Trader::addToStorage(const std::string& product, unsigned int numbe
 	return mStorage.add(product, number);
 }
 
+unsigned int Trader::removeFromStorage(const std::string& product, unsigned int number)
+{
+	return mStorage.remove(product, number);
+}
+
 unsigned int Trader::storageLeft() const
 {
 	return mStorage.capacityLeft();
@@ -218,6 +223,10 @@ unsigned int Market::sell(const std::string& product, unsigned int number, Trade
 
 	if(i)
 		mSurplus[product] += i;
+
+	if(number && product == "Labour" && i != number) {
+		mTrader.removeMoney(p * (number - i));
+	}
 
 	mRecord[product].second += i;
 	return i;
@@ -386,51 +395,88 @@ float Producer::deenhance()
 	}
 }
 
+float Producer::getProductionPrice(const Market& m, const SolarObject& obj) const
+{
+	float price = 0.0f;
+	for(const auto& it : ProductCatalog::getInstance()->getRequiredGoods(mProduct, obj)) {
+		price += m.getPrice(it.first) * it.second;
+	}
+	return price;
+}
+
 unsigned int Producer::produce(Market& m, const Settlement& settlement)
 {
-	float labourCoeff = ProductCatalog::getInstance()->getLabourRequired(mProduct, *settlement.getSolarObject());
-	unsigned int labourCap = ProductCatalog::getInstance()->getLabourCap(mProduct, *settlement.getSolarObject());
+	// Calculate price of input good per produced unit for each input good.
+	// The input good with the highest price is the bottleneck.
+	// The sum is the required amount needed to produce one unit.
+	// Calculate how many units we can afford with our money and buy input goods accordingly.
+	float initMoney = mTrader.getMoney();
+	std::map<std::string, float> inputPricePerProducedUnit;
+	float totalMoneyNeededPerProducedUnit = 0.0f;
+	auto reqGoods = ProductCatalog::getInstance()->getRequiredGoods(mProduct, *settlement.getSolarObject());
+	for(const auto& it : reqGoods) {
+		auto price = m.getPrice(it.first) * it.second;
+		inputPricePerProducedUnit[it.first] = price;
+		totalMoneyNeededPerProducedUnit += price;
+	}
+	unsigned int maxCanAffordToProduce = mTrader.getMoney() / totalMoneyNeededPerProducedUnit;
 
-	if(!labourCap)
-		labourCap = UINT_MAX;
-
-	if(m.getPrice(mProduct) < m.getPrice("Labour") * labourCoeff) {
+	if(m.getPrice(mProduct) < totalMoneyNeededPerProducedUnit) {
+		// not enough revenue to pay the expenses
 		return 0;
 	}
 
-	unsigned int wantToProduce = UINT_MAX;
-	unsigned int requiredLabour = std::min<unsigned int>(labourCap, wantToProduce * labourCoeff);
-	unsigned int numLabour = m.buy("Labour", requiredLabour, mTrader);
+	std::map<std::string, unsigned int> neededGoodQuantities;
+	for(const auto& it : reqGoods) {
+		neededGoodQuantities[it.first] = maxCanAffordToProduce * it.second;
+	}
+
 	assert(mLevel > 0);
-	float wholeProd = numLabour / labourCoeff;
-	wholeProd = wholeProd * (1.0f + (mLevel - 1) * 0.01f);
-	float rem = fmodf(wholeProd, 1.0f);
+	for(const auto& it : neededGoodQuantities) {
+		unsigned int bought = m.buy(it.first, it.second, mTrader);
+		printf("On %10s, producer of %10s bought %6u/%6u units of %s.\n", settlement.getSolarObject()->getName().c_str(),
+				mProduct.c_str(), bought, it.second, it.first.c_str());
+	}
+
+	float canProduce = FLT_MAX;
+	for(const auto& it : reqGoods) {
+		canProduce = std::min(canProduce, mTrader.items(it.first) / it.second);
+	}
+
+	canProduce = canProduce * (1.0f + (mLevel - 1) * 0.01f);
+	float rem = fmodf(canProduce, 1.0f);
 	unsigned int remProd = rem != 0.0f ? (Common::Random::uniform() < rem ? 1 : 0) : 0;
-	unsigned int prod = (unsigned int) wholeProd + remProd;
+	unsigned int prod = (unsigned int) canProduce + remProd;
 
 	if(prod) {
 		mTrader.addToStorage(mProduct, prod);
+		for(const auto& it : reqGoods) {
+			mTrader.removeFromStorage(it.first, it.second * prod);
+		}
 	}
 
 	unsigned int num = 0;
 	if(mTrader.items(mProduct)) {
-		num = m.sell(mProduct, mTrader.items(mProduct), mTrader);
+		auto have = mTrader.items(mProduct);
+		num = m.sell(mProduct, have, mTrader);
+		printf("On %10s, producer of %10s sold   %6u/%6u units.\n", settlement.getSolarObject()->getName().c_str(),
+				mProduct.c_str(), num, have);
 	}
 
-#if 0
-	if(num < wantToProduce) {
-		const char* reason = "unknown";
-		if(mTrader.getMoney() - num * m.getPrice(mProduct) < m.getPrice("Labour"))
-			reason = "factory has no money for labour";
-		else if(numLabour < requiredLabour)
-			reason = "no labour available";
-		printf("Production stop! Wanted to sell %5u %s, could only sell %5u. Bought %u/%u labour. Have %.2f money. Reason: %s\n",
-				wantToProduce, mProduct.c_str(), num, numLabour, requiredLabour,
-				mTrader.getMoney(), reason);
+	// in case we could not produce everything (lack of input supply),
+	// sell the remaining input goods.
+	for(const auto& it : reqGoods) {
+		if(mTrader.items(it.first)) {
+			auto have = mTrader.items(it.first);
+			unsigned int num = m.sell(it.first, mTrader.items(it.first), mTrader);
+			printf("On %10s, producer of %10s sold   %6u/%6u units of %s.\n", settlement.getSolarObject()->getName().c_str(),
+					mProduct.c_str(), num, have, it.first.c_str());
+		}
 	}
-#endif
 
-	mTrader.clearProduct("Labour");
+	mTrader.clearAll();
+	float endMoney = mTrader.getMoney();
+	printf("Money from %6f to %6f.\n", initMoney, endMoney);
 	return num;
 }
 

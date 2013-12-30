@@ -36,6 +36,7 @@ class Trader {
 		unsigned int buy(const std::string& product, unsigned int number, float price, Trader& buyer);
 		unsigned int sell(const std::string& product, unsigned int number, float price, Trader& seller);
 		unsigned int addToStorage(const std::string& product, unsigned int number);
+		unsigned int removeFromStorage(const std::string& product, unsigned int number);
 		unsigned int storageLeft() const;
 		unsigned int getMaxCapacity() const { return mStorage.getMaxCapacity(); }
 		const std::map<std::string, unsigned int>& getStorage() const { return mStorage.getStorage(); }
@@ -101,6 +102,7 @@ class Producer {
 		unsigned int produce(Market& m, const Settlement& settlement);
 		const std::string& getProduct() const { return mProduct; }
 		unsigned int getLevel() const { return mLevel; }
+		float getProductionPrice(const Market& m, const SolarObject& obj) const;
 
 	private:
 		std::string mProduct;

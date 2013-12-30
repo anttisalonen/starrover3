@@ -1159,13 +1159,13 @@ void AppDriver::printInfo()
 	for(const auto& obj : mGameState.getSolarSystem().getObjects()) {
 		if(obj->hasMarket()) {
 			auto rec = obj->getMarket()->getLastRecord();
-			for(auto prod : {"Fruit", "Labour", "Luxury goods"}) {
+			for(auto prod : products) {
 				auto it = rec.find(prod);
 				if(it != rec.end()) {
 					auto demand = it->second.first;
 					auto supply = it->second.second;
 					printf("%-10s %-10s %-10u %-10u %-10.2f\n", obj->getName().c_str(),
-							prod, supply, demand, obj->getMarket()->getPrice(prod));
+							prod.c_str(), supply, demand, obj->getMarket()->getPrice(prod));
 				}
 			}
 		}
