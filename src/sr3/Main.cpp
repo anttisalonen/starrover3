@@ -23,8 +23,13 @@ static const float LuxuryLabourRequiredCoefficient = 0.5f; // labour units requi
 static const float FruitConsumptionCoefficient = 0.1f; // units consumed per person
 static const float LuxuryConsumptionCoefficient = 0.2f; // units consumed per person
 static const unsigned int FruitLabourCap = 0; // Can only use maximum n units of labour per update
-static const unsigned int LuxuryLabourCap = 100;
+static const unsigned int LuxuryLabourCap = 1000;
 static const float LabourProducedByCitizen = 0.1f;
+
+static const unsigned int MaxPopulation = 1000000;
+static const unsigned int MinPopulationForColonisation = 400;
+static const unsigned int MinPopulationMoneyForColonisation = 10000.0f;
+
 
 using namespace Common;
 
@@ -295,7 +300,7 @@ Market::Market(float money)
 		mTrader.addToStorage(want, rand() % 30);
 		mTrader.addToStorage(produce, rand() % 100);
 		mTrader.addToStorage(dontneed, rand() % 50);
-		mPrices["Labour"] = 0.01f;
+		mPrices["Labour"] = 1.0f;
 	}
 }
 
@@ -303,7 +308,7 @@ float Market::getPrice(const std::string& product) const
 {
 	auto it = mPrices.find(product);
 	if(it == mPrices.end())
-		return -1.0f;
+		return 1.0f;
 	else
 		return it->second;
 }
@@ -381,11 +386,12 @@ void Market::updatePrices()
 		if(!hadTrans)
 			continue;
 		auto surp = trans_it->second;
-		assert(mPrices.find(prodname) != mPrices.end());
-		if(surp > 0 && mPrices[prodname] > 0.01f) {
-			mPrices[prodname] = mPrices[prodname] * 0.95f;
+		if(surp > 0) {
+			mPrices[prodname] = mPrices[prodname] * 0.9f;
+			if(mPrices[prodname] < 0.01f)
+				mPrices[prodname] = 0.01f;
 		} else if(mTrader.items(prodname) == 0) {
-			mPrices[prodname] = mPrices[prodname] * 1.05f;
+			mPrices[prodname] = mPrices[prodname] * 1.1f;
 		}
 	}
 	mSurplus.clear();
@@ -405,14 +411,16 @@ enum class SOType {
 class Population {
 	public:
 		Population(unsigned int num, float money);
-		void update(Market& m);
+		bool update(Market& m);
 		float getMoney() const;
 		void addMoney(float val);
 		void removeMoney(float m);
 		unsigned int getNum() const;
+		void removePop(unsigned int num);
+		void addPop(unsigned int num);
 
 	private:
-		void consume(Market& m);
+		bool consume(Market& m);
 		void work(Market& m);
 		unsigned int calculateConsumption(float coeff) const;
 
@@ -424,13 +432,14 @@ Population::Population(unsigned int num, float money)
 	: mNum(num),
 	mTrader(money * num, 0)
 {
-	assert(mNum <= 1000000); // cap at 1 million
+	assert(mNum <= MaxPopulation); // cap at 1 million
 }
 
-void Population::update(Market& m)
+bool Population::update(Market& m)
 {
-	consume(m);
+	auto famine = consume(m);
 	work(m);
+	return famine;
 }
 
 unsigned int Population::calculateConsumption(float coeff) const
@@ -441,14 +450,16 @@ unsigned int Population::calculateConsumption(float coeff) const
 	return (unsigned int) totalConsumption + remConsumption;
 }
 
-void Population::consume(Market& m)
+bool Population::consume(Market& m)
 {
+	bool famine = false;
 	unsigned int fruitConsumption = calculateConsumption(FruitConsumptionCoefficient);
 	if(fruitConsumption) {
 		unsigned int bought = m.buy("Fruit", fruitConsumption, mTrader);
 
 		if(bought < fruitConsumption) {
 			mNum = mNum * 0.999f;
+			famine = true;
 #if 1
 			const char* reason = "unknown";
 			if(mTrader.getMoney() < m.getPrice("Fruit"))
@@ -461,7 +472,7 @@ void Population::consume(Market& m)
 		} else {
 			mNum = mNum * 1.001f;
 		}
-		mNum = std::min<unsigned int>(mNum, 1000000);
+		mNum = std::min<unsigned int>(mNum, MaxPopulation);
 	}
 
 	unsigned int luxuryConsumption = calculateConsumption(LuxuryConsumptionCoefficient);
@@ -470,6 +481,7 @@ void Population::consume(Market& m)
 	}
 
 	mTrader.clearAll();
+	return famine;
 }
 
 void Population::work(Market& m)
@@ -500,14 +512,32 @@ unsigned int Population::getNum() const
 	return mNum;
 }
 
+void Population::removePop(unsigned int num)
+{
+	assert(mNum >= num);
+	mNum -= num;
+}
+
+void Population::addPop(unsigned int num)
+{
+	assert(mNum + num <= MaxPopulation);
+	mNum += num;
+}
+
 
 class Settlement;
 
 class SolarObject : public Entity {
 	public:
 		SolarObject(const std::string& name, float size, float mass);
+		~SolarObject();
+		SolarObject(const SolarObject&) = delete;
+		SolarObject(const SolarObject&&) = delete;
+		SolarObject& operator=(const SolarObject&) & = delete;
+		SolarObject& operator=(SolarObject&&) & = delete;
 		SolarObject(const SolarObject* center, const std::string& name, SOType type,
 				float size, float mass, float orbit, float speed, unsigned int marketlevel);
+		bool canBeColonised() const;
 		float getSize() const { return mSize; }
 		float getMass() const { return mMass; }
 		virtual void update(float time) override;
@@ -516,10 +546,14 @@ class SolarObject : public Entity {
 		const Settlement* getSettlement() const { return mSettlement; }
 		const std::string& getName() const { return mName; }
 		bool hasMarket() const { return mSettlement != nullptr; }
+		bool hasSettlement() const { return mSettlement != nullptr; }
+		float getSettlementHappiness() const;
 		Market* getMarket();
 		const Market* getMarket() const;
 		const Trader& getTrader() const;
-		void updateSettlement();
+		bool updateSettlement();
+		Settlement* getOrCreateSettlement();
+		void colonise(SolarObject* target);
 
 	private:
 		std::string mName;
@@ -558,12 +592,14 @@ class Settlement {
 		Settlement& operator=(Settlement&&) & = delete;
 		Market* getMarket() { return &mMarket; }
 		const Market* getMarket() const { return &mMarket; }
+		// NOTE: do not expose non-const Trader to ensure all buy/sell goes through the market.
 		const Trader& getTrader() const { return mMarket.getTrader(); }
-		void update();
+		bool update();
 		unsigned int getPopulation() const;
 		Population* getPopulationObj() { return &mPopulation; }
 		float getPopulationMoney() const;
 		const std::map<std::string, Producer*>& getProducers() const { return mProducers; }
+		float getHappiness() const { return mHappiness; }
 
 	private:
 		void createNewProducers();
@@ -572,6 +608,7 @@ class Settlement {
 		Population mPopulation;
 		std::map<std::string, Producer*> mProducers;
 		const SolarObject* mSolarObject;
+		float mHappiness = 1.0f;
 };
 
 Producer::Producer(const std::string& prod, unsigned int money)
@@ -619,7 +656,6 @@ unsigned int Producer::produce(Market& m, const Settlement& settlement)
 		labourCap = UINT_MAX;
 
 	if(m.getPrice(mProduct) < m.getPrice("Labour") * labourCoeff) {
-		printf("Doesn't make sense to produce %s.\n", mProduct.c_str());
 		return 0;
 	}
 
@@ -640,8 +676,6 @@ unsigned int Producer::produce(Market& m, const Settlement& settlement)
 	unsigned int num = 0;
 	if(mTrader.items(mProduct)) {
 		num = m.sell(mProduct, mTrader.items(mProduct), mTrader);
-		printf("Sold %u/%u %s produced with %u/%u labour.\n", wantToProduce,
-				num, mProduct.c_str(), numLabour, requiredLabour);
 	}
 
 #if 0
@@ -676,8 +710,9 @@ Settlement::~Settlement()
 		delete it.second;
 }
 
-void Settlement::update()
+bool Settlement::update()
 {
+	bool foundNewSettlement = false;
 	if(mPopulation.getNum() > 20) {
 		if(mPopulation.getMoney() > 10000.0f && mMarket.getMoney() < 10000.0f) {
 			// transfer money from population to market for more liquidity
@@ -685,7 +720,7 @@ void Settlement::update()
 			mMarket.addMoney(5000.0f);
 		}
 
-		mPopulation.update(mMarket);
+		auto famine = mPopulation.update(mMarket);
 		for(auto it : mProducers) {
 			auto num = it.second->produce(mMarket, *this);
 			if(num == 0) {
@@ -695,11 +730,24 @@ void Settlement::update()
 			}
 		}
 
-		mMarket.fixLabour();
+		auto unemployment = mMarket.fixLabour();
+		auto totalLabour = mPopulation.getNum() * LabourProducedByCitizen;
+		auto unemploymentRate = unemployment / totalLabour;
+		auto happiness = famine ? 0.0f : (1.0f - unemploymentRate);
+		mHappiness = happiness * 0.2f + 0.8f * mHappiness;
+		if(mPopulation.getNum() > MinPopulationForColonisation &&
+				mPopulation.getMoney() > MinPopulationMoneyForColonisation) {
+			if(Random::uniform() < (1.0f - mHappiness)) {
+				foundNewSettlement = true;
+			}
+		}
+	} else {
+		// TODO: abandon settlement
 	}
 	createNewProducers();
 
 	mMarket.updatePrices();
+	return foundNewSettlement;
 }
 
 unsigned int Settlement::getPopulation() const
@@ -751,6 +799,12 @@ SolarObject::SolarObject(const std::string& name, float size, float mass)
 {
 }
 
+SolarObject::~SolarObject()
+{
+	if(mSettlement)
+		delete mSettlement;
+}
+
 SolarObject::SolarObject(const SolarObject* center, const std::string& name, SOType type,
 		float size, float mass, float orbit, float speed, unsigned int marketlevel)
 	: mName(name),
@@ -776,10 +830,40 @@ void SolarObject::update(float time)
 	mPosition.y = origo.y + mOrbit * cos(mOrbitPosition * PI * 2.0f);
 }
 
-void SolarObject::updateSettlement()
+bool SolarObject::canBeColonised() const
 {
-	if(mSettlement)
-		mSettlement->update();
+	return mMass < 10.0f && mObjectType != SOType::Star && mObjectType != SOType::GasGiant;
+}
+
+bool SolarObject::updateSettlement()
+{
+	if(mSettlement) {
+		return mSettlement->update();
+	} else {
+		return false;
+	}
+}
+
+Settlement* SolarObject::getOrCreateSettlement()
+{
+	if(!mSettlement)
+		mSettlement = new Settlement(0, this);
+	return mSettlement;
+}
+
+void SolarObject::colonise(SolarObject* target)
+{
+	printf("Moving population from %s to %s.\n", getName().c_str(), target->getName().c_str());
+	auto newSettlement = target->getOrCreateSettlement();
+	auto havePop = mSettlement->getPopulation();
+	assert(havePop >= MinPopulationForColonisation);
+	auto popMigration = (unsigned int)(havePop * 0.2f);
+	mSettlement->getPopulationObj()->removePop(popMigration);
+	newSettlement->getPopulationObj()->addPop(popMigration);
+	assert(mSettlement->getPopulationMoney() >= MinPopulationMoneyForColonisation);
+	auto moneyMigration = mSettlement->getPopulationMoney() * 0.2f;
+	mSettlement->getPopulationObj()->removeMoney(moneyMigration);
+	newSettlement->getPopulationObj()->addMoney(moneyMigration);
 }
 
 Market* SolarObject::getMarket()
@@ -792,6 +876,12 @@ const Market* SolarObject::getMarket() const
 {
 	assert(hasMarket());
 	return mSettlement->getMarket();
+}
+
+float SolarObject::getSettlementHappiness() const
+{
+	assert(mSettlement);
+	return mSettlement->getHappiness();
 }
 
 const Trader& SolarObject::getTrader() const
@@ -875,12 +965,13 @@ class SolarSystem {
 
 		const std::vector<SolarObject*>& getObjects() const;
 		void update(float time);
+		void updateSettlements();
 		TradeNetwork& getTradeNetwork() { return mTradeNetwork; }
 		const TradeNetwork& getTradeNetwork() const { return mTradeNetwork; }
-		void updatePrices();
 
 	private:
 		void updateTradeNetwork();
+		void foundNewSettlement(SolarObject* from);
 
 		std::vector<SolarObject*> mObjects;
 		TradeNetwork mTradeNetwork;
@@ -1146,14 +1237,58 @@ void SolarSystem::updateTradeNetwork()
 	}
 }
 
-void SolarSystem::updatePrices()
+void SolarSystem::updateSettlements()
 {
 	for(auto& obj : mObjects) {
 		if(obj->hasMarket()) {
-			obj->updateSettlement();
+			bool newsett = obj->updateSettlement();
+			if(newsett) {
+				foundNewSettlement(obj);
+			}
 		}
 	}
 	updateTradeNetwork();
+}
+
+void SolarSystem::foundNewSettlement(SolarObject* from)
+{
+	SolarObject* target = nullptr;
+	auto maxHappiness = 0.0f;
+
+	// pick object with highest happiness if any
+	for(auto& obj : mObjects) {
+		if(obj == from)
+			continue;
+
+		if(!obj->hasSettlement())
+			continue;
+
+		auto hap = obj->getSettlementHappiness();
+		if(hap > 0.7f && hap > maxHappiness) {
+			target = obj;
+			maxHappiness = hap;
+		}
+	}
+
+	// if none found colonise a new object
+	if(!target) {
+		for(auto& obj : mObjects) {
+			if(obj == from)
+				continue;
+
+			if(!obj->canBeColonised())
+				continue;
+
+			if(!obj->hasSettlement()) {
+				target = obj;
+				break;
+			}
+		}
+	}
+
+	if(target) {
+		from->colonise(target);
+	}
 }
 
 SolarSystem::~SolarSystem()
@@ -1243,7 +1378,6 @@ void SpaceShipAI::handleLanding(SpaceShip* ss)
 				landobj->getMarket()->sell(it.first, it.second, trader);
 			}
 		}
-
 	}
 
 	// choose next trade
@@ -1391,7 +1525,7 @@ void GameState::update(float t)
 		}
 
 		if(mUpdatePricesTimer.check(t)) {
-			mSystem.updatePrices();
+			mSystem.updateSettlements();
 		}
 	}
 }
@@ -1865,7 +1999,7 @@ void AppDriver::printInfo()
 
 	ProductDefinitions pd;
 	const auto& products = pd.getNames();
-	printf("%-20s %-16s %-16s %-16s ", "System", "Population", "Pop money", "Market money");
+	printf("%-12s %-16s %-16s %-16s %-12s ", "System", "Population", "Pop money", "Market money", "Happiness");
 	for(auto& p : products) {
 		printf("%-16s ", p.c_str());
 	}
@@ -1874,9 +2008,10 @@ void AppDriver::printInfo()
 		if(!obj->hasMarket())
 			continue;
 
-		printf("%-20s %-16s %-16.2f %-16.2f ", obj->getName().c_str(),
+		printf("%-12s %-16s %-16.2f %-16.2f %-12.2f ", obj->getName().c_str(),
 				getPopulationString(*obj).c_str(),
-				obj->getSettlement()->getPopulationMoney(), obj->getMarket()->getMoney());
+				obj->getSettlement()->getPopulationMoney(), obj->getMarket()->getMoney(),
+				obj->getSettlementHappiness());
 		const auto& m = obj->getMarket();
 		for(auto& p : products) {
 			auto i = m->getPrice(p);
