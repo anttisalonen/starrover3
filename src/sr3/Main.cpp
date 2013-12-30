@@ -14,881 +14,15 @@
 #include "common/Vehicle.h"
 #include "common/Steering.h"
 #include "common/Clock.h"
-#include "common/Random.h"
 
-static const float SolarSystemSpeedCoefficient = 10.0f;
-static const float PlanetSizeCoefficient = 500.0f;
-static const float FruitLabourRequiredCoefficient = 0.3f; // labour units required per unit
-static const float LuxuryLabourRequiredCoefficient = 0.5f; // labour units required per unit
-static const float FruitConsumptionCoefficient = 0.1f; // units consumed per person
-static const float LuxuryConsumptionCoefficient = 0.2f; // units consumed per person
-static const unsigned int FruitLabourCap = 0; // Can only use maximum n units of labour per update
-static const unsigned int LuxuryLabourCap = 1000;
-static const float LabourProducedByCitizen = 0.1f;
-
-static const unsigned int MaxPopulation = 1000000;
-static const unsigned int MinPopulationForColonisation = 400;
-static const unsigned int MinPopulationMoneyForColonisation = 10000.0f;
+#include "SolarObject.h"
+#include "Settlement.h"
+#include "Constants.h"
+#include "Product.h"
 
 
 using namespace Common;
 
-class SpaceShip;
-class SolarObject;
-class SolarSystem;
-
-class Storage {
-	public:
-		Storage(unsigned int maxCapacity);
-		unsigned int items(const std::string& product) const;
-		unsigned int add(const std::string& product, unsigned int num);
-		unsigned int remove(const std::string& product, unsigned int num);
-		unsigned int capacityLeft() const;
-		const std::map<std::string, unsigned int>& getStorage() const { return mStorage; }
-		void clearAll();
-		void clearProduct(const std::string& product);
-		unsigned int getMaxCapacity() const { return mMaxCapacity; }
-
-	private:
-		unsigned int mMaxCapacity;
-		unsigned int mCapacityLeft;
-		std::map<std::string, unsigned int> mStorage;
-};
-
-Storage::Storage(unsigned int maxCapacity)
-	: mMaxCapacity(maxCapacity),
-	mCapacityLeft(maxCapacity)
-{
-}
-
-unsigned int Storage::items(const std::string& product) const
-{
-	auto it = mStorage.find(product);
-	if(it == mStorage.end())
-		return 0;
-	return it->second;
-}
-
-unsigned int Storage::add(const std::string& product, unsigned int num)
-{
-	if(mMaxCapacity && mCapacityLeft < num) {
-		num = mCapacityLeft;
-	}
-	mStorage[product] += num;
-	if(mMaxCapacity)
-		mCapacityLeft -= num;
-	return num;
-}
-
-unsigned int Storage::remove(const std::string& product, unsigned int num)
-{
-	auto it = mStorage.find(product);
-	if(it == mStorage.end())
-		return 0;
-	if(it->second >= num) {
-		it->second -= num;
-		if(mMaxCapacity)
-			mCapacityLeft += num;
-		return num;
-	} else {
-		auto val = it->second;
-		it->second = 0;
-		if(mMaxCapacity)
-			mCapacityLeft += val;
-		return val;
-	}
-}
-
-unsigned int Storage::capacityLeft() const
-{
-	if(mMaxCapacity)
-		return mCapacityLeft;
-	else
-		return UINT_MAX;
-}
-
-void Storage::clearAll()
-{
-	for(auto it : mStorage) {
-		remove(it.first, it.second);
-	}
-	assert(mCapacityLeft == mMaxCapacity);
-}
-
-void Storage::clearProduct(const std::string& product)
-{
-	auto it = mStorage.find(product);
-	auto num = it == mStorage.end() ? 0 : it->second;
-	if(num)
-		remove(product, num);
-}
-
-class Trader {
-	public:
-		Trader(float money, unsigned int storage);
-		float getMoney() const;
-		void addMoney(float val);
-		float removeMoney(float val);
-		unsigned int buy(const std::string& product, unsigned int number, float price, Trader& buyer);
-		unsigned int sell(const std::string& product, unsigned int number, float price, Trader& seller);
-		unsigned int addToStorage(const std::string& product, unsigned int number);
-		unsigned int storageLeft() const;
-		unsigned int getMaxCapacity() const { return mStorage.getMaxCapacity(); }
-		const std::map<std::string, unsigned int>& getStorage() const { return mStorage.getStorage(); }
-		unsigned int items(const std::string& product) const;
-		void clearAll();
-		void clearProduct(const std::string& product);
-
-	private:
-		float mMoney;
-		Storage mStorage;
-};
-
-Trader::Trader(float money, unsigned int storage)
-	: mMoney(money),
-	mStorage(storage)
-{
-}
-
-unsigned int Trader::buy(const std::string& product, unsigned int number, float price, Trader& buyer)
-{
-	assert(price >= 0.0f);
-
-	unsigned int tobuy = number;
-	long double tobuy_float = std::min<long double>(buyer.getMoney() / price, (long double)number);
-	tobuy = static_cast<unsigned int>(tobuy_float);
-	tobuy = std::min<unsigned int>(tobuy, mStorage.items(product));
-	tobuy = std::min<unsigned int>(tobuy, buyer.storageLeft());
-	if(tobuy) {
-		float total_cost = tobuy * price;
-		buyer.removeMoney(total_cost);
-		assert(buyer.getMoney() >= 0.0f);
-		if(mMoney >= 0.0f)
-			mMoney += total_cost;
-		auto nums = buyer.addToStorage(product, tobuy);
-		assert(nums == tobuy);
-		unsigned int num = mStorage.remove(product, tobuy);
-		assert(num == tobuy);
-		return tobuy;
-	} else {
-		return 0;
-	}
-}
-
-unsigned int Trader::sell(const std::string& product, unsigned int number, float price, Trader& seller)
-{
-	return seller.buy(product, number, price, *this);
-}
-
-float Trader::getMoney() const
-{
-	if(mMoney < 0.0f)
-		return FLT_MAX;
-	else
-		return mMoney;
-}
-
-void Trader::addMoney(float val)
-{
-	assert(val > 0.0f);
-	assert(mMoney >= 0.0f);
-	mMoney += val;
-}
-
-float Trader::removeMoney(float val)
-{
-	if(mMoney < 0.0f)
-		return FLT_MAX;
-	assert(mMoney >= val);
-	mMoney -= val;
-	return mMoney;
-}
-
-unsigned int Trader::addToStorage(const std::string& product, unsigned int number)
-{
-	return mStorage.add(product, number);
-}
-
-unsigned int Trader::storageLeft() const
-{
-	return mStorage.capacityLeft();
-}
-
-unsigned int Trader::items(const std::string& product) const
-{
-	return mStorage.items(product);
-}
-
-void Trader::clearAll()
-{
-	mStorage.clearAll();
-}
-
-void Trader::clearProduct(const std::string& product)
-{
-	mStorage.clearProduct(product);
-}
-
-class ProductDefinitions {
-	public:
-		ProductDefinitions();
-		const std::vector<std::string>& getNames() const;
-
-	private:
-		std::vector<std::string> mNames;
-};
-
-ProductDefinitions::ProductDefinitions()
-{
-	mNames.push_back("Fruit");
-	mNames.push_back("Minerals");
-	mNames.push_back("Luxury goods");
-	mNames.push_back("Labour");
-}
-
-const std::vector<std::string>& ProductDefinitions::getNames() const
-{
-	return mNames;
-}
-
-class Market {
-	public:
-		Market(float money);
-		float getPrice(const std::string& product) const;
-		unsigned int items(const std::string& product) const;
-		float getMoney() const;
-		void addMoney(float val);
-		const std::map<std::string, unsigned int>& getStorage() const { return mTrader.getStorage(); }
-		unsigned int buy(const std::string& product, unsigned int number, Trader& buyer);
-		unsigned int sell(const std::string& product, unsigned int number, Trader& seller);
-		const Trader& getTrader() const { return mTrader; }
-		void updatePrices();
-		unsigned int fixLabour();
-		std::map<std::string, std::pair<int, int>> getLastRecord();
-
-	private:
-		std::map<std::string, float> mPrices;
-		Trader mTrader;
-		std::map<std::string, int> mSurplus;
-		std::map<std::string, std::pair<int, int>> mRecord;
-};
-
-Market::Market(float money)
-	: mTrader(money, 0)
-{
-	if(money) {
-		int type = rand() % 3;
-		std::string want;
-		std::string produce;
-		std::string dontneed;
-		if(type == 0) {
-			want = "Fruit";
-			produce = "Minerals";
-			dontneed = "Luxury goods";
-		} else if(type == 1) {
-			want = "Luxury goods";
-			produce = "Fruit";
-			dontneed = "Minerals";
-		} else {
-			want = "Minerals";
-			produce = "Luxury goods";
-			dontneed = "Fruit";
-		}
-		mPrices[want] = 1.0f + ((rand() % 100) * 0.01f);
-		mPrices[produce] = 1.0f + ((rand() % 100) * 0.01f);
-		mPrices[dontneed] = 1.0f + ((rand() % 100) * 0.01f);
-		mTrader.addToStorage(want, rand() % 30);
-		mTrader.addToStorage(produce, rand() % 100);
-		mTrader.addToStorage(dontneed, rand() % 50);
-		mPrices["Labour"] = 1.0f;
-	}
-}
-
-float Market::getPrice(const std::string& product) const
-{
-	auto it = mPrices.find(product);
-	if(it == mPrices.end())
-		return 1.0f;
-	else
-		return it->second;
-}
-
-unsigned int Market::items(const std::string& product) const
-{
-	return mTrader.items(product);
-}
-
-float Market::getMoney() const
-{
-	return mTrader.getMoney();
-}
-
-void Market::addMoney(float val)
-{
-	mTrader.addMoney(val);
-}
-
-unsigned int Market::buy(const std::string& product, unsigned int number, Trader& buyer)
-{
-	auto p = getPrice(product);
-	auto i = mTrader.buy(product, number, p, buyer);
-	if(i) {
-		mSurplus[product] -= i;
-		if(product == "Labour") {
-			// pay labour credit
-			mTrader.removeMoney(p * i);
-		}
-	}
-
-	mRecord[product].first += i;
-	return i;
-}
-
-unsigned int Market::sell(const std::string& product, unsigned int number, Trader& seller)
-{
-	auto p = getPrice(product);
-	if(number && product == "Labour") {
-		// loan money for labour since it will always even itself out
-		mTrader.addMoney(p * number);
-	}
-
-	auto i = mTrader.sell(product, number, p, seller);
-
-	if(i)
-		mSurplus[product] += i;
-
-	mRecord[product].second += i;
-	return i;
-}
-
-unsigned int Market::fixLabour()
-{
-	// can simply remove items and consider the labour credit paid
-	auto unemployment = items("Labour");
-	mTrader.clearProduct("Labour");
-	return unemployment;
-}
-
-std::map<std::string, std::pair<int, int>> Market::getLastRecord()
-{
-	auto m = mRecord;
-	mRecord.clear();
-	return m;
-}
-
-void Market::updatePrices()
-{
-	assert(mTrader.items("Labour") == 0);
-	for(const auto& it : mTrader.getStorage()) {
-		auto prodname = it.first;
-		auto trans_it = mSurplus.find(prodname);
-		auto hadTrans = trans_it != mSurplus.end();
-		if(!hadTrans)
-			continue;
-		auto surp = trans_it->second;
-		if(surp > 0) {
-			mPrices[prodname] = mPrices[prodname] * 0.9f;
-			if(mPrices[prodname] < 0.01f)
-				mPrices[prodname] = 0.01f;
-		} else if(mTrader.items(prodname) == 0) {
-			mPrices[prodname] = mPrices[prodname] * 1.1f;
-		}
-	}
-	mSurplus.clear();
-}
-
-
-enum class SOType {
-	Star,
-	GasGiant,
-	RockyNoAtmosphere,
-	RockyOxygen,
-	RockyNitrogen,
-	RockyCarbonDioxide,
-	RockyMethane
-};
-
-class Population {
-	public:
-		Population(unsigned int num, float money);
-		bool update(Market& m);
-		float getMoney() const;
-		void addMoney(float val);
-		void removeMoney(float m);
-		unsigned int getNum() const;
-		void removePop(unsigned int num);
-		void addPop(unsigned int num);
-
-	private:
-		bool consume(Market& m);
-		void work(Market& m);
-		unsigned int calculateConsumption(float coeff) const;
-
-		unsigned int mNum;
-		Trader mTrader;
-};
-
-Population::Population(unsigned int num, float money)
-	: mNum(num),
-	mTrader(money * num, 0)
-{
-	assert(mNum <= MaxPopulation); // cap at 1 million
-}
-
-bool Population::update(Market& m)
-{
-	auto famine = consume(m);
-	work(m);
-	return famine;
-}
-
-unsigned int Population::calculateConsumption(float coeff) const
-{
-	float totalConsumption = mNum * coeff;
-	float rem = fmodf(totalConsumption, 1.0f);
-	unsigned int remConsumption = rem != 0.0f ? (Random::uniform() < rem ? 1 : 0) : 0;
-	return (unsigned int) totalConsumption + remConsumption;
-}
-
-bool Population::consume(Market& m)
-{
-	bool famine = false;
-	unsigned int fruitConsumption = calculateConsumption(FruitConsumptionCoefficient);
-	if(fruitConsumption) {
-		unsigned int bought = m.buy("Fruit", fruitConsumption, mTrader);
-
-		if(bought < fruitConsumption) {
-			mNum = mNum * 0.999f;
-			famine = true;
-#if 1
-			const char* reason = "unknown";
-			if(mTrader.getMoney() < m.getPrice("Fruit"))
-				reason = "no money";
-			else if(m.items("Fruit") == 0)
-				reason = "no fruit";
-			printf("Famine! Need %5u fruit, could only buy %5u. Reason: %s\n",
-					fruitConsumption, bought, reason);
-#endif
-		} else {
-			mNum = mNum * 1.001f;
-		}
-		mNum = std::min<unsigned int>(mNum, MaxPopulation);
-	}
-
-	unsigned int luxuryConsumption = calculateConsumption(LuxuryConsumptionCoefficient);
-	if(luxuryConsumption) {
-		m.buy("Luxury goods", luxuryConsumption, mTrader);
-	}
-
-	mTrader.clearAll();
-	return famine;
-}
-
-void Population::work(Market& m)
-{
-	unsigned int labour = mNum * LabourProducedByCitizen;
-	mTrader.addToStorage("Labour", labour);
-	unsigned int num = m.sell("Labour", labour, mTrader);
-	assert(num == labour);
-}
-
-float Population::getMoney() const
-{
-	return mTrader.getMoney();
-}
-
-void Population::addMoney(float val)
-{
-	mTrader.addMoney(val);
-}
-
-void Population::removeMoney(float m)
-{
-	mTrader.removeMoney(m);
-}
-
-unsigned int Population::getNum() const
-{
-	return mNum;
-}
-
-void Population::removePop(unsigned int num)
-{
-	assert(mNum >= num);
-	mNum -= num;
-}
-
-void Population::addPop(unsigned int num)
-{
-	assert(mNum + num <= MaxPopulation);
-	mNum += num;
-}
-
-
-class Settlement;
-
-class SolarObject : public Entity {
-	public:
-		SolarObject(const std::string& name, float size, float mass);
-		~SolarObject();
-		SolarObject(const SolarObject&) = delete;
-		SolarObject(const SolarObject&&) = delete;
-		SolarObject& operator=(const SolarObject&) & = delete;
-		SolarObject& operator=(SolarObject&&) & = delete;
-		SolarObject(const SolarObject* center, const std::string& name, SOType type,
-				float size, float mass, float orbit, float speed, unsigned int marketlevel);
-		bool canBeColonised() const;
-		float getSize() const { return mSize; }
-		float getMass() const { return mMass; }
-		virtual void update(float time) override;
-		SOType getType() const { return mObjectType; }
-		Settlement* getSettlement() { return mSettlement; }
-		const Settlement* getSettlement() const { return mSettlement; }
-		const std::string& getName() const { return mName; }
-		bool hasMarket() const { return mSettlement != nullptr; }
-		bool hasSettlement() const { return mSettlement != nullptr; }
-		float getSettlementHappiness() const;
-		Market* getMarket();
-		const Market* getMarket() const;
-		const Trader& getTrader() const;
-		bool updateSettlement();
-		Settlement* getOrCreateSettlement();
-		void colonise(SolarObject* target);
-
-	private:
-		std::string mName;
-		float mSize;
-		float mMass;
-		float mOrbit = 0.0f;
-		float mOrbitPosition = 0.0f;
-		float mSpeed = 0.0f;
-		const SolarObject* mCenter = nullptr;
-		SOType mObjectType = SOType::GasGiant;
-		Settlement* mSettlement = nullptr;
-};
-
-class Producer {
-	public:
-		Producer(const std::string& prod, unsigned int money);
-		void enhance(float money);
-		float deenhance();
-		unsigned int produce(Market& m, const Settlement& settlement);
-		const std::string& getProduct() const { return mProduct; }
-		unsigned int getLevel() const { return mLevel; }
-
-	private:
-		std::string mProduct;
-		Trader mTrader;
-		unsigned int mLevel = 1;
-};
-
-class Settlement {
-	public:
-		Settlement(unsigned int marketlevel, const SolarObject* obj);
-		~Settlement();
-		Settlement(const Settlement&) = delete;
-		Settlement(const Settlement&&) = delete;
-		Settlement& operator=(const Settlement&) & = delete;
-		Settlement& operator=(Settlement&&) & = delete;
-		Market* getMarket() { return &mMarket; }
-		const Market* getMarket() const { return &mMarket; }
-		// NOTE: do not expose non-const Trader to ensure all buy/sell goes through the market.
-		const Trader& getTrader() const { return mMarket.getTrader(); }
-		bool update();
-		unsigned int getPopulation() const;
-		Population* getPopulationObj() { return &mPopulation; }
-		float getPopulationMoney() const;
-		const std::map<std::string, Producer*>& getProducers() const { return mProducers; }
-		float getHappiness() const { return mHappiness; }
-
-	private:
-		void createNewProducers();
-
-		Market mMarket;
-		Population mPopulation;
-		std::map<std::string, Producer*> mProducers;
-		const SolarObject* mSolarObject;
-		float mHappiness = 1.0f;
-};
-
-Producer::Producer(const std::string& prod, unsigned int money)
-	: mProduct(prod),
-	mTrader(money, 0)
-{
-}
-
-void Producer::enhance(float money)
-{
-	mTrader.addMoney(money);
-	mLevel++;
-}
-
-float Producer::deenhance()
-{
-	auto money = mTrader.getMoney();
-	if(money > 1000.0f && mLevel > 1) {
-		mTrader.removeMoney(1000.0f);
-		mLevel--;
-		return 1000.0f;
-	} else {
-		return 0.0f;
-	}
-}
-
-unsigned int Producer::produce(Market& m, const Settlement& settlement)
-{
-	float consumptionCoeff = 1.0f;
-	float labourCoeff = 1.0f;
-	unsigned int labourCap = 0;
-	if(mProduct == "Fruit") {
-		consumptionCoeff = FruitConsumptionCoefficient;
-		labourCoeff = FruitLabourRequiredCoefficient;
-		labourCap = FruitLabourCap;
-	} else if(mProduct == "Luxury goods") {
-		consumptionCoeff = LuxuryConsumptionCoefficient;
-		labourCoeff = LuxuryLabourRequiredCoefficient;
-		labourCap = LuxuryLabourCap;
-	} else {
-		assert(0);
-	}
-
-	if(!labourCap)
-		labourCap = UINT_MAX;
-
-	if(m.getPrice(mProduct) < m.getPrice("Labour") * labourCoeff) {
-		return 0;
-	}
-
-	unsigned int wantToProduce = UINT_MAX;
-	unsigned int requiredLabour = std::min<unsigned int>(labourCap, wantToProduce * labourCoeff);
-	unsigned int numLabour = m.buy("Labour", requiredLabour, mTrader);
-	assert(mLevel > 0);
-	float wholeProd = numLabour / labourCoeff;
-	wholeProd = wholeProd * (1.0f + (mLevel - 1) * 0.01f);
-	float rem = fmodf(wholeProd, 1.0f);
-	unsigned int remProd = rem != 0.0f ? (Random::uniform() < rem ? 1 : 0) : 0;
-	unsigned int prod = (unsigned int) wholeProd + remProd;
-
-	if(prod) {
-		mTrader.addToStorage(mProduct, prod);
-	}
-
-	unsigned int num = 0;
-	if(mTrader.items(mProduct)) {
-		num = m.sell(mProduct, mTrader.items(mProduct), mTrader);
-	}
-
-#if 0
-	if(num < wantToProduce) {
-		const char* reason = "unknown";
-		if(mTrader.getMoney() - num * m.getPrice(mProduct) < m.getPrice("Labour"))
-			reason = "factory has no money for labour";
-		else if(numLabour < requiredLabour)
-			reason = "no labour available";
-		printf("Production stop! Wanted to sell %5u %s, could only sell %5u. Bought %u/%u labour. Have %.2f money. Reason: %s\n",
-				wantToProduce, mProduct.c_str(), num, numLabour, requiredLabour,
-				mTrader.getMoney(), reason);
-	}
-#endif
-
-	mTrader.clearProduct("Labour");
-	return num;
-}
-
-
-Settlement::Settlement(unsigned int marketlevel, const SolarObject* obj)
-	: mMarket(marketlevel * 1000000.0f),
-	mPopulation(pow(5, marketlevel) + 200, marketlevel * 1000),
-	mSolarObject(obj)
-{
-	assert(marketlevel <= 8);
-}
-
-Settlement::~Settlement()
-{
-	for(auto it : mProducers)
-		delete it.second;
-}
-
-bool Settlement::update()
-{
-	bool foundNewSettlement = false;
-	if(mPopulation.getNum() > 20) {
-		if(mPopulation.getMoney() > 10000.0f && mMarket.getMoney() < 10000.0f) {
-			// transfer money from population to market for more liquidity
-			mPopulation.removeMoney(5000.0f);
-			mMarket.addMoney(5000.0f);
-		}
-
-		auto famine = mPopulation.update(mMarket);
-		for(auto it : mProducers) {
-			auto num = it.second->produce(mMarket, *this);
-			if(num == 0) {
-				auto money = it.second->deenhance();
-				if(money > 0.0f)
-					mPopulation.addMoney(money);
-			}
-		}
-
-		auto unemployment = mMarket.fixLabour();
-		auto totalLabour = mPopulation.getNum() * LabourProducedByCitizen;
-		auto unemploymentRate = unemployment / totalLabour;
-		auto happiness = famine ? 0.0f : (1.0f - unemploymentRate);
-		mHappiness = happiness * 0.2f + 0.8f * mHappiness;
-		if(mPopulation.getNum() > MinPopulationForColonisation &&
-				mPopulation.getMoney() > MinPopulationMoneyForColonisation) {
-			if(Random::uniform() < (1.0f - mHappiness)) {
-				foundNewSettlement = true;
-			}
-		}
-	} else {
-		// TODO: abandon settlement
-	}
-	createNewProducers();
-
-	mMarket.updatePrices();
-	return foundNewSettlement;
-}
-
-unsigned int Settlement::getPopulation() const
-{
-	return mPopulation.getNum();
-}
-
-float Settlement::getPopulationMoney() const
-{
-	return mPopulation.getMoney();
-}
-
-
-void Settlement::createNewProducers()
-{
-	for(auto product : {"Fruit", "Luxury goods"}) {
-		if(!strcmp(product, "Fruit") && mSolarObject->getType() != SOType::RockyOxygen)
-			continue;
-
-		float labourCoeff = 1.0f;
-		if(!strcmp(product, "Fruit")) {
-			labourCoeff = FruitLabourRequiredCoefficient;
-		} else if(!strcmp(product, "Luxury goods")) {
-			labourCoeff = LuxuryLabourRequiredCoefficient;
-		} else {
-			assert(0);
-		}
-
-		if(mMarket.getPrice(product) > labourCoeff * mMarket.getPrice("Labour")) {
-			if(mPopulation.getMoney() > 1000.0f) {
-				mPopulation.removeMoney(1000.0f);
-				auto it = mProducers.find(product);
-				if(it == mProducers.end()) {
-					mProducers[product] = new Producer(product, 1000.0f);
-				} else {
-					it->second->enhance(1000.0f);
-				}
-			}
-		}
-	}
-}
-
-
-SolarObject::SolarObject(const std::string& name, float size, float mass)
-	: mName(name),
-	mSize(size * 20.0f),
-	mMass(mass * 20.0f),
-	mObjectType(SOType::Star)
-{
-}
-
-SolarObject::~SolarObject()
-{
-	if(mSettlement)
-		delete mSettlement;
-}
-
-SolarObject::SolarObject(const SolarObject* center, const std::string& name, SOType type,
-		float size, float mass, float orbit, float speed, unsigned int marketlevel)
-	: mName(name),
-	mSize(size),
-	mMass(mass),
-	mOrbit(orbit * 50000.0f),
-	mOrbitPosition(rand() % 100 * 0.01f),
-	mSpeed(speed * 0.002f),
-	mCenter(center),
-	mObjectType(type)
-{
-	if(marketlevel > 0) {
-		mSettlement = new Settlement(marketlevel, this);
-	}
-	update(0.0f);
-}
-
-void SolarObject::update(float time)
-{
-	mOrbitPosition += time * mSpeed;
-	auto origo = mCenter ? mCenter->getPosition() : Vector3();
-	mPosition.x = origo.x + mOrbit * sin(mOrbitPosition * PI * 2.0f);
-	mPosition.y = origo.y + mOrbit * cos(mOrbitPosition * PI * 2.0f);
-}
-
-bool SolarObject::canBeColonised() const
-{
-	return mMass < 10.0f && mObjectType != SOType::Star && mObjectType != SOType::GasGiant;
-}
-
-bool SolarObject::updateSettlement()
-{
-	if(mSettlement) {
-		return mSettlement->update();
-	} else {
-		return false;
-	}
-}
-
-Settlement* SolarObject::getOrCreateSettlement()
-{
-	if(!mSettlement)
-		mSettlement = new Settlement(0, this);
-	return mSettlement;
-}
-
-void SolarObject::colonise(SolarObject* target)
-{
-	printf("Moving population from %s to %s.\n", getName().c_str(), target->getName().c_str());
-	auto newSettlement = target->getOrCreateSettlement();
-	auto havePop = mSettlement->getPopulation();
-	assert(havePop >= MinPopulationForColonisation);
-	auto popMigration = (unsigned int)(havePop * 0.2f);
-	mSettlement->getPopulationObj()->removePop(popMigration);
-	newSettlement->getPopulationObj()->addPop(popMigration);
-	assert(mSettlement->getPopulationMoney() >= MinPopulationMoneyForColonisation);
-	auto moneyMigration = mSettlement->getPopulationMoney() * 0.2f;
-	mSettlement->getPopulationObj()->removeMoney(moneyMigration);
-	newSettlement->getPopulationObj()->addMoney(moneyMigration);
-}
-
-Market* SolarObject::getMarket()
-{
-	assert(hasMarket());
-	return mSettlement->getMarket();
-}
-
-const Market* SolarObject::getMarket() const
-{
-	assert(hasMarket());
-	return mSettlement->getMarket();
-}
-
-float SolarObject::getSettlementHappiness() const
-{
-	assert(mSettlement);
-	return mSettlement->getHappiness();
-}
-
-const Trader& SolarObject::getTrader() const
-{
-	assert(hasMarket());
-	return mSettlement->getMarket()->getTrader();
-}
 
 class TradeRoute {
 	public:
@@ -978,6 +112,8 @@ class SolarSystem {
 };
 
 
+class SpaceShip;
+
 class SpaceShipAI {
 	public:
 		SpaceShipAI();
@@ -1055,7 +191,7 @@ void SpaceShip::update(float time)
 		Vector3 accel;
 
 		if(mSystem) {
-			th *= SolarSystemSpeedCoefficient;
+			th *= Constants::SolarSystemSpeedCoefficient;
 			for(const auto& obj : mSystem->getObjects()) {
 				auto dist = Entity::distanceBetween(*this, *obj);
 				if(dist) {
@@ -1090,7 +226,7 @@ bool SpaceShip::canLand(const SolarObject& obj) const
 
 	// TODO: should actually check relative speed
 	auto dist = Entity::distanceBetween(*this, obj);
-	if(dist > std::max(0.5f, obj.getSize()) * PlanetSizeCoefficient + 500.0f ||
+	if(dist > std::max(0.5f, obj.getSize()) * Constants::PlanetSizeCoefficient + 500.0f ||
 			getVelocity().length() > 10000.0f) {
 		return false;
 	} else {
@@ -1208,8 +344,7 @@ SolarSystem::SolarSystem()
 void SolarSystem::updateTradeNetwork()
 {
 	mTradeNetwork.clearTradeRoutes();
-	ProductDefinitions pd;
-	const auto& products = pd.getNames();
+	const auto& products = ProductCatalog::getInstance()->getNames();
 
 	for(SolarObject* o : mObjects) {
 		if(!o->hasMarket())
@@ -1326,7 +461,7 @@ void SpaceShipAI::control(SpaceShip* ss, float time)
 				auto desiredVelocity = mTarget->getPosition() - ss->getPosition();
 				auto velDiff = desiredVelocity - ss->getVelocity() * 2.5f;
 				velDiff = Math::rotate2D(velDiff, -ss->getXYRotation());
-				auto velDiffNorm = velDiff / (ss->EnginePower * SolarSystemSpeedCoefficient);
+				auto velDiffNorm = velDiff / (ss->EnginePower * Constants::SolarSystemSpeedCoefficient);
 				ss->SideThrust = clamp(-1.0f, velDiffNorm.y, 1.0f);
 				ss->Thrust = clamp(-1.0f, velDiffNorm.x, 1.0f);
 
@@ -1356,9 +491,7 @@ float SpaceShipAI::getPotentialRevenue(const TradeRoute& tr) const
 	const auto& prod = tr.getProduct();
 	auto p1 = m1->getPrice(prod);
 	auto p2 = m2->getPrice(prod);
-	auto volume = std::max(mSS->getTrader().getMaxCapacity(), m1->items(prod));
-	volume = std::min(volume, (unsigned int)(m2->getMoney() / m2->getPrice(prod)));
-	return volume * (p2 - p1);
+	return (p2 - p1);
 }
 
 void SpaceShipAI::handleLanding(SpaceShip* ss)
@@ -1386,13 +519,13 @@ void SpaceShipAI::handleLanding(SpaceShip* ss)
 		auto& tn = ss->getSystem()->getTradeNetwork();
 		auto routes = tn.getTradeRoutesFrom(landobj);
 		if(routes.size() == 0) {
-			auto routemap = tn.getTradeRoutes();
-			for(auto it : routemap)
+			const auto& routemap = tn.getTradeRoutes();
+			for(const auto& it : routemap)
 				routes.insert(routes.end(), it.second.begin(), it.second.end());
 		}
 
 		if(routes.size() != 0) {
-			std::sort(routes.begin(), routes.end(), [&] (const boost::shared_ptr<TradeRoute>& r1,
+			std::sort(routes.begin(), routes.end(), [this] (const boost::shared_ptr<TradeRoute>& r1,
 						const boost::shared_ptr<TradeRoute>& r2) -> bool {
 					return getPotentialRevenue(*r1) < getPotentialRevenue(*r2); } );
 			unsigned int index = routes.size() - 1;
@@ -1403,7 +536,6 @@ void SpaceShipAI::handleLanding(SpaceShip* ss)
 			mTarget = mTradeRoute->getFrom();
 		} else {
 			// no routes, wander aimlessly
-			assert(0);
 			const auto& objs = ss->getSystem()->getObjects();
 			assert(objs.size() > 0);
 			int index = rand() % objs.size();
@@ -1832,7 +964,7 @@ void AppDriver::drawSpace()
 			glTranslatef(tr.x, tr.y, 0.0f);
 			float s = so->getSize();
 			float points = clamp(16.0f, s * 8.0f, 128.0f);
-			s = s * mZoom * PlanetSizeCoefficient;
+			s = s * mZoom * Constants::PlanetSizeCoefficient;
 			glBegin(GL_TRIANGLE_FAN);
 			glVertex2f(0.0f,  0.0f);
 			for(int i = 0; i < points + 1; i++) {
@@ -1997,8 +1129,8 @@ void AppDriver::printInfo()
 		}
 	}
 
-	ProductDefinitions pd;
-	const auto& products = pd.getNames();
+	auto products = ProductCatalog::getInstance()->getNames();
+	products.push_back("Labour");
 	printf("%-12s %-16s %-16s %-16s %-12s ", "System", "Population", "Pop money", "Market money", "Happiness");
 	for(auto& p : products) {
 		printf("%-16s ", p.c_str());
