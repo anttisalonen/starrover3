@@ -65,17 +65,17 @@ Settlement* SolarObject::getOrCreateSettlement()
 
 void SolarObject::colonise(SolarObject* target)
 {
-	printf("Moving population from %s to %s.\n", getName().c_str(), target->getName().c_str());
 	auto newSettlement = target->getOrCreateSettlement();
 	auto havePop = mSettlement->getPopulation();
 	assert(havePop >= Constants::MinPopulationForColonisation);
-	auto popMigration = (unsigned int)(havePop * 0.2f);
+	auto popMigration = (unsigned int)(havePop * 0.05f);
 	mSettlement->getPopulationObj()->removePop(popMigration);
 	newSettlement->getPopulationObj()->addPop(popMigration);
 	assert(mSettlement->getPopulationMoney() >= Constants::MinPopulationMoneyForColonisation);
-	auto moneyMigration = mSettlement->getPopulationMoney() * 0.2f;
+	auto moneyMigration = mSettlement->getPopulationMoney() * 0.05f;
 	mSettlement->getPopulationObj()->removeMoney(moneyMigration);
 	newSettlement->getPopulationObj()->addMoney(moneyMigration);
+	printf("Moving %10u population from %s to %s.\n", popMigration, getName().c_str(), target->getName().c_str());
 }
 
 Market* SolarObject::getMarket()

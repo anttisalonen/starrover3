@@ -19,6 +19,7 @@
 #include "Settlement.h"
 #include "Constants.h"
 #include "Product.h"
+#include "Econ.h"
 
 
 using namespace Common;
@@ -172,7 +173,7 @@ SpaceShip::SpaceShip(bool players, SolarSystem* s)
 	: Vehicle(1.0f, 10000000.0f, 10000000.0f, true),
 	mPlayers(players),
 	mSystem(s),
-	mTrader(100.0f, 200),
+	mTrader(Constants::SpaceShipCargoSpace * 5.0f, Constants::SpaceShipCargoSpace),
 	mID(++NextID)
 {
 	Color = mPlayers ? Color::White : Color::Red;
@@ -225,9 +226,13 @@ bool SpaceShip::canLand(const SolarObject& obj) const
 		return false;
 
 	// TODO: should actually check relative speed
+	// Make landing easier for the dumb AI
 	auto dist = Entity::distanceBetween(*this, obj);
-	if(dist > std::max(0.5f, obj.getSize()) * Constants::PlanetSizeCoefficient + 500.0f ||
-			getVelocity().length() > 10000.0f) {
+	auto maxDist = mPlayers ? std::max(0.5f, obj.getSize()) * Constants::PlanetSizeCoefficient + 500.0f :
+		std::max(1.0f, obj.getSize()) * Constants::PlanetSizeCoefficient + 2500.0f;
+	if(dist > maxDist) {
+		return false;
+	} else if(mPlayers && getVelocity().length() > 10000.0f) {
 		return false;
 	} else {
 		return true;
@@ -363,7 +368,7 @@ void SolarSystem::updateTradeNetwork()
 			for(const auto& prod : products) {
 				auto it = stor.find(prod);
 				if(it != stor.end() && it->second > 0 &&
-						m2->getPrice(prod) > 1.05f * m1->getPrice(prod) &&
+						m2->getPrice(prod) > 1.5f * m1->getPrice(prod) &&
 						m2->getMoney() > m2->getPrice(prod)) {
 					mTradeNetwork.addTradeRoute(o, o2, prod);
 				}
@@ -399,7 +404,7 @@ void SolarSystem::foundNewSettlement(SolarObject* from)
 			continue;
 
 		auto hap = obj->getSettlementHappiness();
-		if(hap > 0.7f && hap > maxHappiness) {
+		if(hap > 0.4f && hap > maxHappiness) {
 			target = obj;
 			maxHappiness = hap;
 		}
@@ -463,7 +468,7 @@ void SpaceShipAI::control(SpaceShip* ss, float time)
 				velDiff = Math::rotate2D(velDiff, -ss->getXYRotation());
 				auto velDiffNorm = velDiff / (ss->EnginePower * Constants::SolarSystemSpeedCoefficient);
 				ss->SideThrust = clamp(-1.0f, velDiffNorm.y, 1.0f);
-				ss->Thrust = clamp(-1.0f, velDiffNorm.x, 1.0f);
+				ss->Thrust = clamp(-1.0f, velDiffNorm.x * 2.0f, 1.0f);
 
 				if(ss->canLand(*mTarget)) {
 					ss->land(mTarget);
@@ -508,7 +513,7 @@ void SpaceShipAI::handleLanding(SpaceShip* ss)
 	if(landobj->hasMarket()) {
 		for(auto it : trader.getStorage()) {
 			if(it.second) {
-				landobj->getMarket()->sell(it.first, it.second, trader);
+				landobj->getMarket()->sell(it.first, it.second, trader, Econ::Entity::Trader, landobj);
 			}
 		}
 	}
@@ -550,7 +555,7 @@ void SpaceShipAI::handleLanding(SpaceShip* ss)
 	if(mTradeRoute && landobj == mTradeRoute->getFrom()) {
 		auto prod = mTradeRoute->getProduct();
 		assert(landobj->hasMarket());
-		landobj->getMarket()->buy(prod, trader.storageLeft(), trader);
+		landobj->getMarket()->buy(prod, trader.storageLeft(), trader, Econ::Entity::Trader, landobj);
 		mTarget = mTradeRoute->getTo();
 
 #if 0
@@ -651,7 +656,7 @@ void GameState::update(float t)
 		}
 
 		if(mSpawnSolarShipTimer.check(t)) {
-			if(getSolarSystem().getTradeNetwork().getTradeRoutes().size() > 3 && (rand() % 3) == 0) {
+			if(getSolarSystem().getTradeNetwork().getTradeRoutes().size() * 20 < mSolarShips.size()) {
 				spawnSolarShip();
 			}
 		}
@@ -1136,6 +1141,9 @@ void AppDriver::printInfo()
 		printf("%-16s ", p.c_str());
 	}
 	printf("\n");
+
+	unsigned long long totalPeople = 0;
+	unsigned long long totalHappyPeople = 0;
 	for(const auto& obj : mGameState.getSolarSystem().getObjects()) {
 		if(!obj->hasMarket())
 			continue;
@@ -1144,32 +1152,49 @@ void AppDriver::printInfo()
 				getPopulationString(*obj).c_str(),
 				obj->getSettlement()->getPopulationMoney(), obj->getMarket()->getMoney(),
 				obj->getSettlementHappiness());
+
+		auto pop = obj->getSettlement()->getPopulation();
+		totalPeople += pop;
+		totalHappyPeople += pop * obj->getSettlementHappiness();
+
 		const auto& m = obj->getMarket();
 		for(auto& p : products) {
-			auto i = m->getPrice(p);
-			if(i >= 0.0f)
-				printf("%-7.2f %-5d    ", m->getPrice(p), m->items(p));
-			else
-				printf("                 ");
+			auto items = m->items(p);
+			auto price = m->getPrice(p);
+			if(price > 10000) {
+				printf("%-6.3fk ", price / 1000.0f);
+			} else {
+				printf("%-7.2f ", price);
+			}
+			if(items > 100000) {
+				printf("%5dk   ", items / 1000);
+			} else {
+				printf("%5d    ", items);
+			}
 		}
 		printf("\n");
 	}
 
-	printf("%-10s %-10s %-10s %-10s %-10s\n", "Object", "Product", "Supply", "Demand", "Price");
-	for(const auto& obj : mGameState.getSolarSystem().getObjects()) {
-		if(obj->hasMarket()) {
-			auto rec = obj->getMarket()->getLastRecord();
-			for(auto prod : products) {
-				auto it = rec.find(prod);
-				if(it != rec.end()) {
-					auto demand = it->second.first;
-					auto supply = it->second.second;
-					printf("%-10s %-10s %-10u %-10u %-10.2f\n", obj->getName().c_str(),
-							prod.c_str(), supply, demand, obj->getMarket()->getPrice(prod));
-				}
+	if(totalPeople < 10000)
+		printf("Total people: %llu\n", totalPeople);
+	else if(totalPeople < 10000000)
+		printf("Total people: %lluk\n", totalPeople / 1000);
+	else
+		printf("Total people: %lluM\n", totalPeople / 1000000);
+	printf("Total happiness: %.2Lf %%\n", 100.0f * (totalHappyPeople / (long double)totalPeople));
+
+	printf("%-16s %-16s %-16s %-16s %-16s %-16s\n", "Object", "Product", "Production", "Consumption", "Import", "Export");
+	for(auto prod : products) {
+		for(const auto& obj : mGameState.getSolarSystem().getObjects()) {
+			if(obj->hasMarket()) {
+				auto dt = Econ::Stats::getInstance()->getData(obj, prod);
+				printf("%-16s %-16s %-16u %-16u %-16u %-16u\n", obj->getName().c_str(),
+						prod.c_str(), dt.Production, dt.Consumption,
+						dt.Import, dt.Export);
 			}
 		}
 	}
+	Econ::Stats::getInstance()->clearData();
 
 	for(const auto& obj : mGameState.getSolarSystem().getObjects()) {
 		if(obj->hasMarket()) {

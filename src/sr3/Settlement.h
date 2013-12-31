@@ -57,18 +57,18 @@ class Market {
 		float getMoney() const;
 		void addMoney(float val);
 		const std::map<std::string, unsigned int>& getStorage() const { return mTrader.getStorage(); }
-		unsigned int buy(const std::string& product, unsigned int number, Trader& buyer);
-		unsigned int sell(const std::string& product, unsigned int number, Trader& seller);
+		unsigned int buy(const std::string& product, unsigned int number,
+				Trader& buyer, Econ::Entity ent, const SolarObject* solarObject);
+		unsigned int sell(const std::string& product, unsigned int number,
+				Trader& seller, Econ::Entity ent, const SolarObject* solarObject);
 		const Trader& getTrader() const { return mTrader; }
 		void updatePrices();
 		unsigned int fixLabour();
-		std::map<std::string, std::pair<int, int>> getLastRecord();
 
 	private:
 		std::map<std::string, float> mPrices;
 		Trader mTrader;
 		std::map<std::string, int> mSurplus;
-		std::map<std::string, std::pair<int, int>> mRecord;
 };
 
 class Population {
@@ -99,6 +99,9 @@ class Producer {
 		Producer(const std::string& prod, unsigned int money);
 		void enhance(float money);
 		float deenhance();
+		void addMoney(float val);
+		void removeMoney(float val);
+		float getMoney() const;
 		unsigned int produce(Market& m, const Settlement& settlement);
 		const std::string& getProduct() const { return mProduct; }
 		unsigned int getLevel() const { return mLevel; }

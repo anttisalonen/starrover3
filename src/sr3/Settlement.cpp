@@ -5,6 +5,7 @@
 #include "Settlement.h"
 #include "SolarObject.h"
 #include "Product.h"
+#include "Econ.h"
 
 #include "common/Random.h"
 
@@ -195,7 +196,7 @@ void Market::addMoney(float val)
 	mTrader.addMoney(val);
 }
 
-unsigned int Market::buy(const std::string& product, unsigned int number, Trader& buyer)
+unsigned int Market::buy(const std::string& product, unsigned int number, Trader& buyer, Econ::Entity ent, const SolarObject* solarObject)
 {
 	auto p = getPrice(product);
 	auto i = mTrader.buy(product, number, p, buyer);
@@ -207,11 +208,11 @@ unsigned int Market::buy(const std::string& product, unsigned int number, Trader
 		}
 	}
 
-	mRecord[product].first += i;
+	Econ::Stats::getInstance()->addEvent(Econ::Event::Buy, product, ent, solarObject, i);
 	return i;
 }
 
-unsigned int Market::sell(const std::string& product, unsigned int number, Trader& seller)
+unsigned int Market::sell(const std::string& product, unsigned int number, Trader& seller, Econ::Entity ent, const SolarObject* solarObject)
 {
 	auto p = getPrice(product);
 	if(number && product == "Labour") {
@@ -228,7 +229,7 @@ unsigned int Market::sell(const std::string& product, unsigned int number, Trade
 		mTrader.removeMoney(p * (number - i));
 	}
 
-	mRecord[product].second += i;
+	Econ::Stats::getInstance()->addEvent(Econ::Event::Sell, product, ent, solarObject, i);
 	return i;
 }
 
@@ -238,13 +239,6 @@ unsigned int Market::fixLabour()
 	auto unemployment = items("Labour");
 	mTrader.clearProduct("Labour");
 	return unemployment;
-}
-
-std::map<std::string, std::pair<int, int>> Market::getLastRecord()
-{
-	auto m = mRecord;
-	mRecord.clear();
-	return m;
 }
 
 void Market::updatePrices()
@@ -263,11 +257,13 @@ void Market::updatePrices()
 		}
 
 		if(surp > 0) {
-			mPrices[prodname] = mPrices[prodname] * 0.9f;
+			mPrices[prodname] = mPrices[prodname] / (1.10f + Common::Random::uniform() * 0.1f);
 			if(mPrices[prodname] < 0.01f)
 				mPrices[prodname] = 0.01f;
-		} else if(mTrader.items(prodname) == 0) {
-			mPrices[prodname] = mPrices[prodname] * 1.1f;
+		} else {
+			if(mTrader.items(prodname) == 0) {
+				mPrices[prodname] = mPrices[prodname] * (1.10f + Common::Random::uniform() * 0.1f);
+			}
 		}
 	}
 	mSurplus.clear();
@@ -302,7 +298,7 @@ bool Population::consume(Market& m)
 	bool famine = false;
 	unsigned int fruitConsumption = calculateConsumption(ProductCatalog::getInstance()->getConsumption("Fruit", *mSolarObject));
 	if(fruitConsumption) {
-		unsigned int bought = m.buy("Fruit", fruitConsumption, mTrader);
+		unsigned int bought = m.buy("Fruit", fruitConsumption, mTrader, Econ::Entity::Population, mSolarObject);
 
 		if(bought < fruitConsumption) {
 			mNum = mNum * 0.999f;
@@ -322,9 +318,12 @@ bool Population::consume(Market& m)
 		mNum = std::min<unsigned int>(mNum, Constants::MaxPopulation);
 	}
 
-	unsigned int luxuryConsumption = calculateConsumption(ProductCatalog::getInstance()->getConsumption("Luxury goods", *mSolarObject));
-	if(luxuryConsumption) {
-		m.buy("Luxury goods", luxuryConsumption, mTrader);
+	if(!famine) {
+		unsigned int luxuryConsumption =
+			calculateConsumption(ProductCatalog::getInstance()->getConsumption("Luxury goods", *mSolarObject));
+		if(luxuryConsumption) {
+			m.buy("Luxury goods", luxuryConsumption, mTrader, Econ::Entity::Population, mSolarObject);
+		}
 	}
 
 	mTrader.clearAll();
@@ -335,7 +334,7 @@ void Population::work(Market& m)
 {
 	unsigned int labour = mNum * Constants::LabourProducedByCitizen;
 	mTrader.addToStorage("Labour", labour);
-	unsigned int num = m.sell("Labour", labour, mTrader);
+	unsigned int num = m.sell("Labour", labour, mTrader, Econ::Entity::Population, mSolarObject);
 	assert(num == labour);
 }
 
@@ -395,6 +394,21 @@ float Producer::deenhance()
 	}
 }
 
+void Producer::addMoney(float val)
+{
+	mTrader.addMoney(val);
+}
+
+void Producer::removeMoney(float val)
+{
+	mTrader.removeMoney(val);
+}
+
+float Producer::getMoney() const
+{
+	return mTrader.getMoney();
+}
+
 float Producer::getProductionPrice(const Market& m, const SolarObject& obj) const
 {
 	float price = 0.0f;
@@ -410,10 +424,10 @@ unsigned int Producer::produce(Market& m, const Settlement& settlement)
 	// The input good with the highest price is the bottleneck.
 	// The sum is the required amount needed to produce one unit.
 	// Calculate how many units we can afford with our money and buy input goods accordingly.
-	float initMoney = mTrader.getMoney();
 	std::map<std::string, float> inputPricePerProducedUnit;
 	float totalMoneyNeededPerProducedUnit = 0.0f;
-	auto reqGoods = ProductCatalog::getInstance()->getRequiredGoods(mProduct, *settlement.getSolarObject());
+	auto obj = settlement.getSolarObject();
+	auto reqGoods = ProductCatalog::getInstance()->getRequiredGoods(mProduct, *obj);
 	for(const auto& it : reqGoods) {
 		auto price = m.getPrice(it.first) * it.second;
 		inputPricePerProducedUnit[it.first] = price;
@@ -433,9 +447,7 @@ unsigned int Producer::produce(Market& m, const Settlement& settlement)
 
 	assert(mLevel > 0);
 	for(const auto& it : neededGoodQuantities) {
-		unsigned int bought = m.buy(it.first, it.second, mTrader);
-		printf("On %10s, producer of %10s bought %6u/%6u units of %s.\n", settlement.getSolarObject()->getName().c_str(),
-				mProduct.c_str(), bought, it.second, it.first.c_str());
+		m.buy(it.first, it.second, mTrader, Econ::Entity::Industry, obj);
 	}
 
 	float canProduce = FLT_MAX;
@@ -458,9 +470,7 @@ unsigned int Producer::produce(Market& m, const Settlement& settlement)
 	unsigned int num = 0;
 	if(mTrader.items(mProduct)) {
 		auto have = mTrader.items(mProduct);
-		num = m.sell(mProduct, have, mTrader);
-		printf("On %10s, producer of %10s sold   %6u/%6u units.\n", settlement.getSolarObject()->getName().c_str(),
-				mProduct.c_str(), num, have);
+		m.sell(mProduct, have, mTrader, Econ::Entity::Industry, obj);
 	}
 
 	// in case we could not produce everything (lack of input supply),
@@ -468,15 +478,11 @@ unsigned int Producer::produce(Market& m, const Settlement& settlement)
 	for(const auto& it : reqGoods) {
 		if(mTrader.items(it.first)) {
 			auto have = mTrader.items(it.first);
-			unsigned int num = m.sell(it.first, mTrader.items(it.first), mTrader);
-			printf("On %10s, producer of %10s sold   %6u/%6u units of %s.\n", settlement.getSolarObject()->getName().c_str(),
-					mProduct.c_str(), num, have, it.first.c_str());
+			m.sell(it.first, have, mTrader, Econ::Entity::IndustryCancel, obj);
 		}
 	}
 
 	mTrader.clearAll();
-	float endMoney = mTrader.getMoney();
-	printf("Money from %6f to %6f.\n", initMoney, endMoney);
 	return num;
 }
 
@@ -497,6 +503,7 @@ Settlement::~Settlement()
 
 bool Settlement::update()
 {
+	mMarket.updatePrices();
 	bool foundNewSettlement = false;
 	if(mPopulation.getNum() > 20) {
 		if(mPopulation.getMoney() > 10000.0f && mMarket.getMoney() < 10000.0f) {
@@ -512,6 +519,11 @@ bool Settlement::update()
 				auto money = it.second->deenhance();
 				if(money > 0.0f)
 					mPopulation.addMoney(money);
+				if(it.second->getMoney() < 1000.0f && mPopulation.getMoney() > 10000.0f) {
+					// transfer money from population to industry for more liquidity
+					mPopulation.removeMoney(5000.0f);
+					it.second->addMoney(5000.0f);
+				}
 			}
 		}
 
@@ -531,7 +543,6 @@ bool Settlement::update()
 	}
 	createNewProducers();
 
-	mMarket.updatePrices();
 	return foundNewSettlement;
 }
 
