@@ -22,14 +22,14 @@ class ProductParameter {
 
 class Product {
 	public:
-		Product(const std::string& name, float consumption, float labourreq, float productioncap);
+		Product(const std::string& name, float consumption, float labourreq, float areafactor, float productioncap);
 
 		// getters
 		const std::string& getName() const;
 		float getConsumption(const SolarObject& obj) const;
 		float getLabourRequired(const SolarObject& obj) const;
 		float getGoodRequired(const std::string& name, const SolarObject& obj) const;
-		float getProductionCap(const SolarObject& obj) const;
+		float getMaxProduction(const SolarObject& obj) const;
 		std::vector<std::string> getRequiredGoods(const SolarObject& obj) const;
 		float getRequiredGoodQuantity(const std::string& reqGood, const SolarObject& obj) const;
 
@@ -49,7 +49,7 @@ class ProductCatalog {
 		static ProductCatalog* getInstance();
 		float getConsumption(const std::string& prod, const SolarObject& obj) const;
 		float getLabourRequired(const std::string& prod, const SolarObject& obj) const;
-		float getProductionCap(const std::string& prod, const SolarObject& obj) const;
+		float getMaxProduction(const std::string& prod, const SolarObject& obj) const;
 
 		std::map<std::string, float> getRequiredGoods(const std::string& prod, const SolarObject& obj) const;
 

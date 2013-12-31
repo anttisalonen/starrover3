@@ -68,11 +68,11 @@ void SolarObject::colonise(SolarObject* target)
 	auto newSettlement = target->getOrCreateSettlement();
 	auto havePop = mSettlement->getPopulation();
 	assert(havePop >= Constants::MinPopulationForColonisation);
-	auto popMigration = (unsigned int)(havePop * 0.05f);
+	auto popMigration = (unsigned int)(havePop * Constants::PercentagePopulationColonised);
 	mSettlement->getPopulationObj()->removePop(popMigration);
 	newSettlement->getPopulationObj()->addPop(popMigration);
 	assert(mSettlement->getPopulationMoney() >= Constants::MinPopulationMoneyForColonisation);
-	auto moneyMigration = mSettlement->getPopulationMoney() * 0.05f;
+	auto moneyMigration = mSettlement->getPopulationMoney() * Constants::PercentagePopulationColonised;
 	mSettlement->getPopulationObj()->removeMoney(moneyMigration);
 	newSettlement->getPopulationObj()->addMoney(moneyMigration);
 	printf("Moving %10u population from %s to %s.\n", popMigration, getName().c_str(), target->getName().c_str());

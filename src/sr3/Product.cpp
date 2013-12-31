@@ -23,11 +23,12 @@ void ProductParameter::setOverrideValue(SOType t, float value)
 }
 
 
-Product::Product(const std::string& name, float consumption, float labourreq, float productioncap)
+Product::Product(const std::string& name, float consumption, float labourreq, float areafactor, float productioncap)
 	: mName(name)
 {
 	mParameters.insert({"consumption", ProductParameter(consumption)});
 	mParameters.insert({"productionCap", ProductParameter(productioncap)});
+	mParameters.insert({"areaFactor", ProductParameter(areafactor)});
 
 	mGoodsRequired.insert({"Labour", ProductParameter(labourreq)});
 }
@@ -52,9 +53,14 @@ float Product::getGoodRequired(const std::string& name, const SolarObject& obj) 
 	return mGoodsRequired.at(name).getValue(obj);
 }
 
-float Product::getProductionCap(const SolarObject& obj) const
+float Product::getMaxProduction(const SolarObject& obj) const
 {
-	return mParameters.at("productionCap").getValue(obj);
+	auto cap = mParameters.at("productionCap").getValue(obj);
+	auto areaFactor = mParameters.at("areaFactor").getValue(obj);
+	if(areaFactor < 0.0f)
+		return cap;
+	auto area = obj.getArea();
+	return std::min(cap, areaFactor * area);
 }
 
 void Product::setOverrideValue(const std::string& name, SOType t, float value)
@@ -92,21 +98,15 @@ ProductCatalog* ProductCatalog::getInstance()
 
 ProductCatalog::ProductCatalog()
 {
-	//                                           name               demd  lab    prod cap
-#if 0
-	mProducts.insert({"Fruit",           Product("Fruit",           0.1f, 0.3f, 0.0f)});
-	mProducts.insert({"Luxury goods",    Product("Luxury goods",    0.2f, 0.5f, 1000000.0f)});
-	mProducts.insert({"Precious metals", Product("Precious metals", 0.0f, 0.7f, 0.0f)});
-#else
-	mProducts.insert({"Fruit",           Product("Fruit",           0.1f, 0.3f, 0.0f)});
-	mProducts.insert({"Luxury goods",    Product("Luxury goods",    0.1f, 0.3f, 1000000.0f)});
-	mProducts.insert({"Precious metals", Product("Precious metals", 0.0f, 0.3f, 0.0f)});
-#endif
+	//                                           name               demd  lab   area factor prod cap
+	mProducts.insert({"Fruit",           Product("Fruit",           0.1f, 0.1f, 1000000.0f, 0.0f)});
+	mProducts.insert({"Luxury goods",    Product("Luxury goods",    0.3f, 9.0f, -1.0f,      1000000.0f)});
+	mProducts.insert({"Precious metals", Product("Precious metals", 0.0f, 0.3f, 10000.0f,   0.0f)});
 
 	mProducts.at("Fruit").setOverrideValue("productionCap", SOType::RockyOxygen, 1000000.0f);
 	mProducts.at("Precious metals").setOverrideValue("productionCap", SOType::RockyNoAtmosphere, 1000000.0f);
 
-	mProducts.at("Luxury goods").setGoodRequirement("Precious metals", 2.0f);
+	mProducts.at("Luxury goods").setGoodRequirement("Precious metals", 0.2f);
 
 	for(auto it : mProducts) {
 		mNames.push_back(it.first);
@@ -123,9 +123,9 @@ float ProductCatalog::getLabourRequired(const std::string& prod, const SolarObje
 	return mProducts.at(prod).getLabourRequired(obj);
 }
 
-float ProductCatalog::getProductionCap(const std::string& prod, const SolarObject& obj) const
+float ProductCatalog::getMaxProduction(const std::string& prod, const SolarObject& obj) const
 {
-	return mProducts.at(prod).getProductionCap(obj);
+	return mProducts.at(prod).getMaxProduction(obj);
 }
 
 const std::vector<std::string>& ProductCatalog::getNames() const

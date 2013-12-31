@@ -200,8 +200,8 @@ unsigned int Market::buy(const std::string& product, unsigned int number, Trader
 {
 	auto p = getPrice(product);
 	auto i = mTrader.buy(product, number, p, buyer);
+	mSurplus[product] -= i;
 	if(i) {
-		mSurplus[product] -= i;
 		if(product == "Labour") {
 			// pay labour credit
 			mTrader.removeMoney(p * i);
@@ -222,8 +222,7 @@ unsigned int Market::sell(const std::string& product, unsigned int number, Trade
 
 	auto i = mTrader.sell(product, number, p, seller);
 
-	if(i)
-		mSurplus[product] += i;
+	mSurplus[product] += i;
 
 	if(number && product == "Labour" && i != number) {
 		mTrader.removeMoney(p * (number - i));
@@ -275,7 +274,7 @@ Population::Population(unsigned int num, float money, const SolarObject* obj)
 	mTrader(money * num, 0),
 	mSolarObject(obj)
 {
-	assert(mNum <= Constants::MaxPopulation); // cap at 1 million
+	assert(mNum <= mSolarObject->getMaxPopulation()); // cap at 1 million/earth
 }
 
 bool Population::update(Market& m)
@@ -301,7 +300,7 @@ bool Population::consume(Market& m)
 		unsigned int bought = m.buy("Fruit", fruitConsumption, mTrader, Econ::Entity::Population, mSolarObject);
 
 		if(bought < fruitConsumption) {
-			mNum = mNum * 0.999f;
+			mNum = mNum / (1.00f + Common::Random::uniform() * 0.1f);
 			famine = true;
 #if 1
 			const char* reason = "unknown";
@@ -313,9 +312,9 @@ bool Population::consume(Market& m)
 					fruitConsumption, bought, reason);
 #endif
 		} else {
-			mNum = mNum * 1.001f;
+			mNum = mNum * (1.00f + Common::Random::uniform() * 0.1f);
 		}
-		mNum = std::min<unsigned int>(mNum, Constants::MaxPopulation);
+		mNum = std::min<unsigned int>(mNum, mSolarObject->getMaxPopulation());
 	}
 
 	if(!famine) {
@@ -366,7 +365,7 @@ void Population::removePop(unsigned int num)
 
 void Population::addPop(unsigned int num)
 {
-	assert(mNum + num <= Constants::MaxPopulation);
+	assert(mNum + num <= mSolarObject->getMaxPopulation());
 	mNum += num;
 }
 
@@ -409,10 +408,10 @@ float Producer::getMoney() const
 	return mTrader.getMoney();
 }
 
-float Producer::getProductionPrice(const Market& m, const SolarObject& obj) const
+float Producer::getProductionPrice(const std::string& product, const Market& m, const SolarObject& obj)
 {
 	float price = 0.0f;
-	for(const auto& it : ProductCatalog::getInstance()->getRequiredGoods(mProduct, obj)) {
+	for(const auto& it : ProductCatalog::getInstance()->getRequiredGoods(product, obj)) {
 		price += m.getPrice(it.first) * it.second;
 	}
 	return price;
@@ -433,16 +432,19 @@ unsigned int Producer::produce(Market& m, const Settlement& settlement)
 		inputPricePerProducedUnit[it.first] = price;
 		totalMoneyNeededPerProducedUnit += price;
 	}
-	unsigned int maxCanAffordToProduce = mTrader.getMoney() / totalMoneyNeededPerProducedUnit;
 
 	if(m.getPrice(mProduct) < totalMoneyNeededPerProducedUnit) {
 		// not enough revenue to pay the expenses
 		return 0;
 	}
 
+	unsigned int maxCanAffordToProduce = mTrader.getMoney() / totalMoneyNeededPerProducedUnit;
+	float canProduce = ProductCatalog::getInstance()->getMaxProduction(mProduct, *obj);
+	unsigned int wantProduce = std::min<unsigned int>(maxCanAffordToProduce, canProduce);
+
 	std::map<std::string, unsigned int> neededGoodQuantities;
 	for(const auto& it : reqGoods) {
-		neededGoodQuantities[it.first] = maxCanAffordToProduce * it.second;
+		neededGoodQuantities[it.first] = wantProduce * it.second;
 	}
 
 	assert(mLevel > 0);
@@ -450,7 +452,6 @@ unsigned int Producer::produce(Market& m, const Settlement& settlement)
 		m.buy(it.first, it.second, mTrader, Econ::Entity::Industry, obj);
 	}
 
-	float canProduce = FLT_MAX;
 	for(const auto& it : reqGoods) {
 		canProduce = std::min(canProduce, mTrader.items(it.first) / it.second);
 	}
@@ -470,7 +471,7 @@ unsigned int Producer::produce(Market& m, const Settlement& settlement)
 	unsigned int num = 0;
 	if(mTrader.items(mProduct)) {
 		auto have = mTrader.items(mProduct);
-		m.sell(mProduct, have, mTrader, Econ::Entity::Industry, obj);
+		num = m.sell(mProduct, have, mTrader, Econ::Entity::Industry, obj);
 	}
 
 	// in case we could not produce everything (lack of input supply),
@@ -482,6 +483,8 @@ unsigned int Producer::produce(Market& m, const Settlement& settlement)
 		}
 	}
 
+	printf("On %s, sold %u of wanted %u of %s.\n", obj->getName().c_str(), num,
+			wantProduce, mProduct.c_str());
 	mTrader.clearAll();
 	return num;
 }
@@ -519,7 +522,7 @@ bool Settlement::update()
 				auto money = it.second->deenhance();
 				if(money > 0.0f)
 					mPopulation.addMoney(money);
-				if(it.second->getMoney() < 1000.0f && mPopulation.getMoney() > 10000.0f) {
+				if(it.second->getMoney() < 10000.0f && mPopulation.getMoney() > 10000.0f) {
 					// transfer money from population to industry for more liquidity
 					mPopulation.removeMoney(5000.0f);
 					it.second->addMoney(5000.0f);
@@ -560,13 +563,13 @@ float Settlement::getPopulationMoney() const
 void Settlement::createNewProducers()
 {
 	for(auto product : ProductCatalog::getInstance()->getNames()) {
-		auto lim = ProductCatalog::getInstance()->getProductionCap(product, *mSolarObject);
+		auto lim = ProductCatalog::getInstance()->getMaxProduction(product, *mSolarObject);
 		if(lim <= 0.0f)
 			continue;
 
-		auto labourCoeff = ProductCatalog::getInstance()->getLabourRequired(product, *mSolarObject);
+		auto price = Producer::getProductionPrice(product, mMarket, *mSolarObject);
 
-		if(mMarket.getPrice(product) > labourCoeff * mMarket.getPrice("Labour")) {
+		if(mMarket.getPrice(product) > price) {
 			if(mPopulation.getMoney() > 1000.0f) {
 				mPopulation.removeMoney(1000.0f);
 				auto it = mProducers.find(product);

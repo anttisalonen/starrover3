@@ -9,6 +9,7 @@ namespace Constants {
 	const unsigned int MaxPopulation = 1000000;
 	const unsigned int MinPopulationForColonisation = 400;
 	const unsigned int MinPopulationMoneyForColonisation = 10000.0f;
+	const float PercentagePopulationColonised = 0.05f;
 
 	const unsigned int SpaceShipCargoSpace = 2000;
 }

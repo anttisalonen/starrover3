@@ -25,6 +25,8 @@ class SolarObject : public Common::Entity {
 				float size, float mass, float orbit, float speed, unsigned int marketlevel);
 		bool canBeColonised() const;
 		float getSize() const { return mSize; }
+		float getArea() const { return mSize * mSize; }
+		float getMaxPopulation() const { return Constants::MaxPopulation * getArea(); }
 		float getMass() const { return mMass; }
 		virtual void update(float time) override;
 		SOType getType() const { return mObjectType; }

@@ -395,12 +395,19 @@ void SolarSystem::foundNewSettlement(SolarObject* from)
 	SolarObject* target = nullptr;
 	auto maxHappiness = 0.0f;
 
+	auto popMigrating = from->getSettlement()->getPopulation() * Constants::PercentagePopulationColonised;
+
 	// pick object with highest happiness if any
 	for(auto& obj : mObjects) {
 		if(obj == from)
 			continue;
 
 		if(!obj->hasSettlement())
+			continue;
+
+		// ensure the target doesn't receive more immigrants than it can handle
+		auto migrateSpace = obj->getMaxPopulation() - obj->getSettlement()->getPopulation();
+		if(migrateSpace < popMigrating * 2)
 			continue;
 
 		auto hap = obj->getSettlementHappiness();

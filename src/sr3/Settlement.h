@@ -105,7 +105,7 @@ class Producer {
 		unsigned int produce(Market& m, const Settlement& settlement);
 		const std::string& getProduct() const { return mProduct; }
 		unsigned int getLevel() const { return mLevel; }
-		float getProductionPrice(const Market& m, const SolarObject& obj) const;
+		static float getProductionPrice(const std::string& product, const Market& m, const SolarObject& obj);
 
 	private:
 		std::string mProduct;
